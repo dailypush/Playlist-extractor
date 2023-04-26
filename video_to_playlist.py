@@ -3,6 +3,7 @@ import sys
 import csv
 import glob
 import logging
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from moviepy.editor import VideoFileClip
 from pydub import AudioSegment
@@ -19,7 +20,6 @@ def extract_audio(video_path, audio_path):
     clip = VideoFileClip(video_path)
     clip.audio.write_audiofile(audio_path)
 
-
 def split_audio(audio_path, chunk_length=20000):
     logger.info("Splitting audio into segments")
     audio = AudioSegment.from_wav(audio_path)
@@ -33,7 +33,6 @@ def split_audio(audio_path, chunk_length=20000):
         segments.append(segment)
 
     return segments
-
 
 async def identify_songs(segments):
     shazam = Shazam()
@@ -58,8 +57,6 @@ async def identify_songs(segments):
 
     return identified_songs
 
-
-
 def generate_csv(identified_songs, output_csv):
     logger.info(f"Generating CSV playlist: {output_csv}")
     with open(output_csv, mode='w', newline='', encoding='utf-8') as csvfile:
@@ -73,7 +70,7 @@ def generate_csv(identified_songs, output_csv):
 def process_video(video_path, output_csv):
     logger.info(f"Processing video: {video_path}")
 
-    audio_path = "temp_audio_file.wav"
+    audio_path = os.path.join(os.getcwd(), "temp_audio_file.wav")
     
     # Ensure the directory is writable
     audio_dir = os.path.dirname(audio_path)
@@ -83,7 +80,7 @@ def process_video(video_path, output_csv):
 
     extract_audio(video_path, audio_path)
     segments = split_audio(audio_path)
-    identified_songs = await identify_songs(segments)
+    identified_songs = asyncio.run(identify_songs(segments))
     generate_csv(identified_songs, output_csv)
 
     if os.path.exists(audio_path):
@@ -91,35 +88,24 @@ def process_video(video_path, output_csv):
 
     logger.info(f"Finished processing video: {video_path}")
 
-
 def find_mp4_files(folder_path):
     mp4_files = glob.glob(os.path.join(folder_path, "*.mp4"))
     return mp4_files
 
 async def main(video_paths):
+    loop = asyncio.get_event_loop()
     with ThreadPoolExecutor() as executor:
-        futures = []
+        tasks = []
         for video_path in video_paths:
             output_csv = os.path.splitext(video_path)[0] + ".csv"
-            future = executor.submit(asyncio.run, process_video(video_path, output_csv))
-            futures.append(future)
+            task = loop.run_in_executor(executor, process_video, video_path, output_csv)
+            tasks.append(task)
 
-        for future in futures:
-            future.result()
+        await asyncio.gather(*tasks)
+
 
 if __name__ == "__main__":
-    import asyncio
-
-    if len(sys.argv) < 2:
-        logger.info("Usage: python video_to_playlist.py [path/to/your/folder]")
-        logger.info("No folder path provided, using default folder: /app/data")
-        folder_path = "/app/data"
-    else:
-        folder_path = sys.argv[1]
-
+    folder_path = sys.argv[1]
     video_paths = find_mp4_files(folder_path)
-    if not video_paths:
-        logger.error(f"No MP4 files found in folder: {folder_path}")
-    else:
-        logger.info(f"Found {len(video_paths)} MP4 files in folder: {folder_path}")
-        asyncio.run(main(video_paths))
+    asyncio.run(main(video_paths))
+
