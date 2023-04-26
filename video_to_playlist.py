@@ -4,6 +4,8 @@ import csv
 import glob
 import logging
 import asyncio
+import shazamio
+print(shazamio.__file__)
 from concurrent.futures import ThreadPoolExecutor
 from moviepy.editor import VideoFileClip
 from pydub import AudioSegment
@@ -51,11 +53,13 @@ async def identify_songs(segments):
             song_id = (song_title, song_artist)
             if song_id not in identified_songs:
                 identified_songs.append(song_id)
+                logger.info(f"Identified song: '{song_title}' by {song_artist}")
 
     if os.path.exists("temp_audio_segment.wav"):
         os.remove("temp_audio_segment.wav")
 
     return identified_songs
+
 
 def generate_csv(identified_songs, output_csv):
     logger.info(f"Generating CSV playlist: {output_csv}")
