@@ -70,7 +70,8 @@ def generate_csv(identified_songs, output_csv):
 def process_video(video_path, output_csv):
     logger.info(f"Processing video: {video_path}")
 
-    audio_path = os.path.join(os.getcwd(), "temp_audio_file.wav")
+    audio_filename = f"temp_audio_file_{os.path.basename(video_path)}.wav"
+    audio_path = os.path.join(os.getcwd(), audio_filename)
     
     # Ensure the directory is writable
     audio_dir = os.path.dirname(audio_path)
