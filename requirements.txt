@@ -3,3 +3,4 @@ imageio==2.9.0
 pydub==0.25.1
 shazamio==0.3.1
 tqdm==4.62.3
+acrcloud
