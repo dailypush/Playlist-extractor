@@ -33,6 +33,12 @@ Settings are in-memory for the current UI session; use command-line source,
 output arguments to set launch defaults. Use the scan CLI
 for options beyond the menu, such as a custom cache path or sample length.
 
+Settings includes **Prepare the next sample in a background thread**, default off.
+It applies to scans and batches, or can be enabled at launch with `ui --threaded`.
+One worker prepares at most one sample ahead; Shazam requests retain their delay
+and run one at a time. Disabling it again preserves saved progress. Settings changes
+last only for the current UI session.
+
 Other menu actions rebuild exports, seed the exact cache and generate recording
 reports without recognition requests. Shazam is the only active provider;
 there is no account or credential setup.

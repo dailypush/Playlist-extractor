@@ -143,6 +143,7 @@ def run(args, event_handler=None):
 
             scan_args = argparse.Namespace(output=args.output, cache=None, interval=args.interval,
                 sample_length=12, min_score=80, delay=args.delay, refine=args.refine,
+                threaded=args.threaded,
                 max_requests=args.max_requests - total_calls if args.max_requests else None,
                 dry_run=False, export_only=False, seed_cache=False)
             try:
@@ -193,6 +194,7 @@ def main(argv=None, event_handler=None):
     parser.add_argument('--max-requests', type=int, default=500, help='New requests across the whole batch per run; 0 disables the cap')
     parser.add_argument('--max-minutes', type=float, default=0, help='Pause after this many minutes; 0 disables')
     parser.add_argument('--no-refine', dest='refine', action='store_false')
+    parser.add_argument('--threaded', action='store_true', help='Prepare one sample ahead in a background thread; recognition remains sequential')
     parser.add_argument('--retry-failed', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)

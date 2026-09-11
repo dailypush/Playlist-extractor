@@ -61,3 +61,12 @@ class TerminalTests(unittest.TestCase):
         with patch('sys.stdin.isatty', return_value=False), patch('sys.stderr', new_callable=io.StringIO) as errors:
             self.assertEqual(terminal.main([]), 2)
             self.assertIn('docker run -it', errors.getvalue())
+
+    def test_threaded_option_reaches_scan_and_batch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'mix.mp4'
+            path.touch()
+            with patch('sys.stdin.isatty', return_value=True), patch('builtins.input', side_effect=['1', '1', '8', '10', 'q']), patch.object(scanner, 'main', return_value=0) as scan, patch.object(terminal.batch, 'main', return_value=0) as batch, patch('sys.stdout', new_callable=io.StringIO):
+                self.assertEqual(terminal.main(['--source', str(path), '--threaded']), 0)
+            self.assertIn('--threaded', scan.call_args.args[0])
+            self.assertIn('--threaded', batch.call_args.args[0])

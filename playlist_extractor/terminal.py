@@ -170,6 +170,7 @@ def settings(args):
     args.delay = integer('Pause between provider requests, seconds', args.delay, 1)
     args.limit = integer('New requests per recording (0 = no cap)', args.limit, 0)
     args.refine = prompt('Extra checks around changes/gaps? y/n', 'y' if args.refine else 'n').lower() != 'n'
+    args.threaded = prompt('Prepare the next sample in a background thread? y/n', 'y' if args.threaded else 'n').lower() == 'y'
 
 
 def scan_arguments(args, source, action):
@@ -179,6 +180,8 @@ def scan_arguments(args, source, action):
         command += ['--max-requests', str(args.limit)]
     if not args.refine:
         command.append('--no-refine')
+    if args.threaded:
+        command.append('--threaded')
     mode = {'2': '--dry-run', '4': '--export-only', '5': '--seed-cache'}.get(action)
     if mode:
         command.append(mode)
@@ -190,6 +193,7 @@ def main(argv=None):
     parser.add_argument('--source', type=Path, default=Path('twitch-pyka'))
     parser.add_argument('--output', type=Path, default=Path('scan_results'))
     parser.add_argument('--provider', choices=['shazam'], default='shazam', help=argparse.SUPPRESS)
+    parser.add_argument('--threaded', action='store_true', help='Enable one-sample background audio preparation')
     args = parser.parse_args(argv)
     args.interval, args.delay, args.limit, args.refine = 45, 3, 0, True
     if not sys.stdin.isatty():
@@ -201,6 +205,7 @@ def main(argv=None):
             print(f'Source: {clean(args.source)}\nResults: {clean(args.output)}')
             print(f'Provider: {args.provider} | sample every {args.interval}s | request pause {args.delay}s')
             print(f'Extra checks: {"on" if args.refine else "off"} | request cap/file: {args.limit or "none"}')
+            print(f'Threaded audio preparation: {"on" if args.threaded else "off"}')
             print('\n1  Scan / resume recording       2  Estimate work (offline)\n'
                   '3  Browse playlists             4  Rebuild playlist exports\n'
                   '5  Seed recognition cache       6  Generate session reports\n'
@@ -217,6 +222,8 @@ def main(argv=None):
                            '--delay', str(args.delay), '--max-requests', str(cap)]
                 if not args.refine:
                     command.append('--no-refine')
+                if args.threaded:
+                    command.append('--threaded')
                 with ProgressDisplay() as display:
                     code = batch.main(command, event_handler=display)
                 if code:

@@ -25,7 +25,7 @@ class BatchTests(unittest.TestCase):
         self.stack.enter_context(patch.object(scanner.shutil, 'which', return_value='/tool'))
         self.stack.enter_context(patch.object(scanner, 'duration', return_value=60))
         self.real_sample = scanner.sample
-        self.stack.enter_context(patch.object(scanner, 'sample', side_effect=lambda p,o,l: fake_sample(p, o + (100 if p.name == 'b.mp4' else 0), l)))
+        self.stack.enter_context(patch.object(scanner, 'sample', side_effect=lambda p,o,l,**kwargs: fake_sample(p, o + (100 if p.name == 'b.mp4' else 0), l)))
 
     def queue(self):
         return json.loads(next((self.root / 'out/batches').glob('*/queue.json')).read_text())
@@ -110,7 +110,7 @@ class BatchTests(unittest.TestCase):
 
     def test_extraction_timeout_keeps_saved_samples_and_continues(self):
         original_sample = scanner.sample
-        def samples(path, offset, length):
+        def samples(path, offset, length, **kwargs):
             if path.name == 'a.mp4' and offset == 45:
                 # Exercise the real timeout wrapper, not just its error type.
                 with patch.object(scanner.subprocess, 'run',

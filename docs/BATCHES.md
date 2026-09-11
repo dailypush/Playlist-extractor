@@ -13,6 +13,9 @@ cache and each recording's original checkpoint/JSON/CSV outputs.
 
 # Optional time budget, checked between processing steps.
 .venv/bin/python -m playlist_extractor batch twitch-pyka --max-requests 500 --max-minutes 60
+
+# Optional background audio preparation; Shazam requests stay sequential.
+.venv/bin/python -m playlist_extractor batch twitch-pyka --threaded --max-requests 500
 ```
 
 The default global cap is 500 new requests per run. Use `--max-requests 0` to
@@ -27,6 +30,28 @@ use `--retry-failed` after checking the file or storage device.
 The terminal menu's **8 — Run / resume batch** uses the configured source/output
 paths, sample interval, pacing and refinement preference, and asks for the global
 request cap. File numbers and queue summaries appear above live per-file progress.
+
+## Optional threaded preparation
+
+`--threaded` uses one background worker to extract and hash the next audio sample
+while the main thread checks the cache, waits between requests, recognizes the
+current sample and saves results. It keeps at most one sample ahead and processes
+one recording at a time. Cache access, requests, progress events and checkpoint
+writes remain on the main thread. The three-second request pause and shared
+request/time budgets still apply; threading adds no concurrent Shazam requests.
+
+Sequential preparation remains the default, including in Compose, for the
+Raspberry Pi Zero 2 target. Enable threading in terminal Settings or launch with
+`ui --threaded`. For Docker batches, append `--threaded` to the batch service's
+command in compose.yaml. FFmpeg may use its own internal threads; this option
+limits preparation jobs, not total OS threads. Performance on the Pi is unverified.
+
+Changing this option reuses the same queue, checkpoints and recognition cache.
+Dry runs, export-only and cache seeding do not start preparation workers. On pause
+or error, pending preparation is discarded and background FFmpeg is stopped;
+only completed recognitions are checkpointed. Some local extraction may therefore
+be repeated on resume, without submitting unused prefetched samples to Shazam.
+Prefetch errors are raised when that offset is reached, retaining earlier results.
 
 ## Queue and recovery
 

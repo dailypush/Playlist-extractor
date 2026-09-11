@@ -5,6 +5,7 @@ Run commands from the repository root. The active package is `playlist_extractor
 - `scanner.py`: media extraction, provider calls, resumable scan orchestration/CLI.
 - `batch.py`: persistent queues, shared request/time budgets and recovery.
 - `locking.py`: shared output lock for scan and batch commands.
+- `prefetch.py`: optional single-worker sample preparation with bounded lookahead.
 - `catalog.py`: song grouping, refinement planning, CSV exports.
 - `cache.py`: provider-scoped exact-PCM recognition cache.
 - `reports.py`: recording-level frequency and overlap reports.
@@ -57,3 +58,19 @@ choose one execution environment for a recording to avoid rescanning it.
 The build context allowlist excludes recordings, credentials, results and legacy
 files. The image uses Python 3.11 and FFmpeg; container verification requires a
 running Docker daemon and network access for dependency installation.
+
+## Raspberry Pi Zero 2 deployment target
+
+The user may run long batches on a Raspberry Pi Zero 2. Keep resource use bounded
+and preserve sequential processing as the default. The optional `--threaded`
+mode uses one audio-preparation worker and at most one prefetched
+sample, while keeping one recognition request in flight and one shared request
+budget/pacing mechanism. Avoid parallel recordings, unbounded task submission
+and loading whole recordings into memory. Coordinate cache/checkpoint writes
+through the main processing thread.
+
+Benchmark extraction, recognition, peak memory and cancellation on the target
+before enabling prefetch by default. Account for FFmpeg's own threads and check
+whether media timeouts need configuration for slower hardware. Validate the
+chosen Pi OS architecture, ShazamIO/native dependency installation and Docker
+image on the device before claiming Pi compatibility; that validation is pending.

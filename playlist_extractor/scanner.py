@@ -1,6 +1,7 @@
 """Resumable Shazam scanning of local DJ recordings."""
 import argparse
 import asyncio
+from concurrent.futures import CancelledError
 from contextlib import nullcontext
 import hashlib
 import io
@@ -16,6 +17,7 @@ import tempfile
 import wave
 from .cache import RecognitionCache, audio_digest, namespace
 from .locking import output_lock
+from .prefetch import SamplePreparation
 
 from .catalog import song_key, write_csv, export, refinement_offsets, timestamp
 
@@ -41,12 +43,38 @@ def duration(path):
     return seconds
 
 
-def sample(path, offset, length):
+def sample(path, offset, length, cancel_event=None):
+    command = ['ffmpeg', '-v', 'error', '-nostdin', '-ss', str(offset),
+               '-i', str(path), '-t', str(length), '-vn', '-ac', '1',
+               '-ar', '16000', '-f', 'wav', 'pipe:1']
     try:
-        return subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-ss', str(offset),
-                               '-i', str(path), '-t', str(length), '-vn', '-ac', '1',
-                               '-ar', '16000', '-f', 'wav', 'pipe:1'],
-                              capture_output=True, check=True, timeout=SAMPLE_TIMEOUT).stdout
+        if cancel_event is None:
+            return subprocess.run(command, capture_output=True, check=True, timeout=SAMPLE_TIMEOUT).stdout
+        if cancel_event.is_set():
+            raise CancelledError()
+        # Poll communicate so cancellation drains pipes and reaps FFmpeg promptly.
+        # The sequential path retains subprocess.run's own timeout cleanup.
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            deadline = time.monotonic() + SAMPLE_TIMEOUT
+            try:
+                while True:
+                    if cancel_event.is_set():
+                        raise CancelledError()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, SAMPLE_TIMEOUT)
+                    try:
+                        audio, errors = process.communicate(timeout=min(0.2, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+                if process.returncode:
+                    raise subprocess.CalledProcessError(process.returncode, command, audio, errors)
+                return audio
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
     except subprocess.TimeoutExpired as error:
         raise ValueError(f'{path.name}: audio extraction at {offset}s timed out after {SAMPLE_TIMEOUT}s') from error
 
@@ -143,6 +171,13 @@ def scan(path, args, settings, event_handler=None):
     known_songs = {song_key(m) for matches in state['results'].values() for m in matches}
     resumed = len(state['results'])
 
+    def prepare(offset, cancel_event):
+        if cancel_event is None:
+            audio = sample(path, offset, args.sample_length)
+        else:
+            audio = sample(path, offset, args.sample_length, cancel_event=cancel_event)
+        return audio, audio_digest(audio)
+
     def run_offsets(positions, phase):
         nonlocal calls, hits
         done = sum(str(offset) in state['results'] for offset in positions)
@@ -151,36 +186,36 @@ def scan(path, args, settings, event_handler=None):
                  requests=calls, cache_hits=hits, resumed=resumed,
                  songs=len(known_songs), **extra)
         progress(activity='Starting phase')
-        for offset in positions:
-            if str(offset) in state['results']:
-                continue
-            progress(activity='Extracting audio', offset=offset)
-            audio = sample(path, offset, args.sample_length)
-            digest = audio_digest(audio)
-            matches = cache.get(provider_key, digest)
-            if matches is None:
-                if args.max_requests is not None and calls >= args.max_requests:
-                    emit('message', text='Request limit reached; rerun to resume.')
-                    return False
-                if calls:
-                    progress(activity='Pacing requests', offset=offset)
-                    time.sleep(args.delay)
-                calls += 1
-                progress(activity='Recognizing audio', offset=offset)
-                matches = recognize(audio, settings)
-                cache.put(provider_key, digest, matches)
-                origin = 'provider'
-            else:
-                hits += 1
-                origin = 'exact_cache'
-            state['results'][str(offset)] = matches
-            state['provenance'][str(offset)] = dict(origin=origin, audio_digest=digest)
-            save(checkpoint, state)
-            known_songs.update(song_key(m) for m in matches)
-            done += 1
-            progress(activity='Sample saved', offset=offset, matches=matches, origin=origin)
-            if not event_handler:
-                print(f'  {timestamp(offset)}: {len(matches)} candidate(s)', flush=True)
+        pending = [offset for offset in positions if str(offset) not in state['results']]
+        with SamplePreparation(pending, prepare, threaded=getattr(args, 'threaded', False)) as prepared:
+            for offset in pending:
+                progress(activity='Extracting audio', offset=offset)
+                audio, digest = next(prepared)
+                matches = cache.get(provider_key, digest)
+                if matches is None:
+                    if args.max_requests is not None and calls >= args.max_requests:
+                        emit('message', text='Request limit reached; rerun to resume.')
+                        return False
+                    if calls:
+                        progress(activity='Pacing requests', offset=offset)
+                        time.sleep(args.delay)
+                    calls += 1
+                    progress(activity='Recognizing audio', offset=offset)
+                    matches = recognize(audio, settings)
+                    cache.put(provider_key, digest, matches)
+                    origin = 'provider'
+                else:
+                    hits += 1
+                    origin = 'exact_cache'
+                state['results'][str(offset)] = matches
+                state['provenance'][str(offset)] = dict(origin=origin, audio_digest=digest)
+                save(checkpoint, state)
+                known_songs.update(song_key(m) for m in matches)
+                done += 1
+                progress(activity='Sample saved', offset=offset, matches=matches, origin=origin)
+                if not event_handler:
+                    print(f'  {timestamp(offset)}: {len(matches)} candidate(s)', flush=True)
+                del audio
         return True
 
     try:
@@ -206,6 +241,8 @@ def scan(path, args, settings, event_handler=None):
                                  refinement_enabled=args.refine, min_score=args.min_score,
                                  complete=False)
         save(checkpoint, state)
+        if getattr(args, 'threaded', False):
+            emit('message', text='Threaded audio preparation: one worker, one sample ahead; Shazam requests remain sequential.')
         complete = run_offsets(offsets, 'Baseline')
         if complete and args.refine:
             complete = run_offsets(refinement_offsets(offsets, state['results'], args.min_score), 'Refinement')
@@ -233,6 +270,7 @@ def main(argv=None, event_handler=None):
     parser.add_argument('--delay', type=float, default=3, help='Seconds between API requests (default: 3)')
     parser.add_argument('--max-requests', type=int, help='Limit new requests per recording in this run')
     parser.add_argument('--no-refine', dest='refine', action='store_false')
+    parser.add_argument('--threaded', action='store_true', help='Prepare one sample ahead in a background thread; recognition remains sequential')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--dry-run', action='store_true', help='Estimate samples without API requests or credentials')
     mode.add_argument('--export-only', action='store_true', help='Rebuild CSVs from the checkpoint without recognition requests')

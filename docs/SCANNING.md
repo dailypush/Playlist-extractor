@@ -35,6 +35,12 @@ adjust pacing, `--interval` for sampling density, or `--no-refine` for baseline
 checks only. `--max-requests` caps new requests per recording per invocation.
 Checkpoint reuse and exact-cache hits do not consume that limit.
 
+Add `--threaded` to prepare one sample ahead in a single background worker while
+recognition remains sequential. The option defaults off and does not change
+checkpoint identity or the request delay. It also works with the `batch` command;
+see [threaded preparation](BATCHES.md#optional-threaded-preparation) for resource
+limits and cancellation behavior.
+
 ShazamIO uses an unofficial service interface and submits locally generated
 fingerprints. Requests have a 45-second timeout and no automatic HTTP retries.
 Service errors stop the operation; completed samples are retained. Ctrl+C also
