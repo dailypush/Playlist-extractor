@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import wave
 from unittest.mock import patch
 
 import scan_streams as scanner
@@ -11,6 +12,14 @@ import scan_streams as scanner
 
 def track(key='a', score=95):
     return dict(id=key, title=key, artist='Artist', score=score, isrc='')
+
+
+def fake_sample(path, offset, length):
+    buffer = io.BytesIO()
+    with wave.open(buffer, 'wb') as output:
+        output.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
+        output.writeframes(int(offset * 2).to_bytes(2, 'little') * 100)
+    return buffer.getvalue()
 
 
 class ScannerTests(unittest.TestCase):
@@ -43,7 +52,7 @@ class ScannerTests(unittest.TestCase):
             source.touch()
             args = [str(source), '--output', str(Path(temp) / 'out'), '--provider', 'shazam', '--delay', '0']
             # No shazamio installation is required for rebuilding exports.
-            with patch.object(scanner, 'duration', return_value=60), patch.object(scanner, 'sample', return_value=b'audio'), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[track()]), patch.dict('sys.modules', {'shazamio': object()}):
+            with patch.object(scanner, 'duration', return_value=60), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[track()]), patch.dict('sys.modules', {'shazamio': object()}):
                 self.assertEqual(scanner.main(args), 0)
             with patch.object(scanner, 'duration', return_value=60), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize') as api, patch.object(scanner, 'sample') as extract, patch.dict('sys.modules', {'shazamio': None}):
                 self.assertEqual(scanner.main(args + ['--export-only']), 0)
@@ -94,10 +103,10 @@ class ScannerTests(unittest.TestCase):
             source.touch()
             args = [str(source), '--output', str(Path(temp) / 'out'), '--delay', '0']
             settings = dict(host='test.acrcloud.com', access_key='key', access_secret='secret')
-            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', return_value=b'audio'), patch.object(scanner, 'credentials', return_value=settings), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', side_effect=[[track()], OSError('network failure')]) as api:
+            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner, 'credentials', return_value=settings), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', side_effect=[[track()], OSError('network failure')]) as api:
                 self.assertEqual(scanner.main(args), 1)
                 self.assertEqual(api.call_count, 2)
-            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', return_value=b'audio'), patch.object(scanner, 'credentials', return_value=settings), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[track()]) as api:
+            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner, 'credentials', return_value=settings), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[track()]) as api:
                 self.assertEqual(scanner.main(args), 0)
                 self.assertEqual(api.call_count, 1)
 
@@ -107,7 +116,7 @@ class ScannerTests(unittest.TestCase):
             source.touch()
             args = [str(source), '--output', str(Path(temp) / 'out'), '--delay', '0', '--max-requests', '2']
             settings = dict(host='test.acrcloud.com', access_key='key', access_secret='secret')
-            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', return_value=b'audio'), patch.object(scanner, 'credentials', return_value=settings), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[]) as api:
+            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner, 'credentials', return_value=settings), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[]) as api:
                 self.assertEqual(scanner.main(args), 0)
                 self.assertEqual(api.call_count, 2)
                 self.assertEqual(scanner.main(args), 0)

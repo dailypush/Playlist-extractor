@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 import unicodedata
 import wave
+from recognition_cache import RecognitionCache, audio_digest, namespace
 
 
 MEDIA = {'.mp4', '.mkv', '.mov', '.flv', '.ts', '.webm', '.mp3', '.m4a', '.wav', '.flac', '.ogg', '.aac'}
@@ -268,30 +269,56 @@ def scan(path, args, settings):
         print(f'Rebuilt review files without recognition requests: {folder}', flush=True)
         return
     calls = 0
+    hits = 0
+    cache = RecognitionCache(args.cache or args.output / 'recognition-cache.sqlite3')
+    provider_key = namespace(identity)
+    state.setdefault('provenance', {})
 
     def run_offsets(positions):
-        nonlocal calls
+        nonlocal calls, hits
         for offset in positions:
             if str(offset) in state['results']:
                 continue
-            if args.max_requests is not None and calls >= args.max_requests:
-                print('Request limit reached; rerun to resume.', flush=True)
-                return False
-            if calls:
-                time.sleep(args.delay)
             audio = sample(path, offset, args.sample_length)
-            calls += 1
-            state['results'][str(offset)] = recognize(audio, settings)
+            digest = audio_digest(audio)
+            matches = cache.get(provider_key, digest)
+            if matches is None:
+                if args.max_requests is not None and calls >= args.max_requests:
+                    print('Request limit reached; rerun to resume.', flush=True)
+                    return False
+                if calls:
+                    time.sleep(args.delay)
+                calls += 1
+                matches = recognize(audio, settings)
+                cache.put(provider_key, digest, matches)
+                origin = 'provider'
+            else:
+                hits += 1
+                origin = 'exact_cache'
+            state['results'][str(offset)] = matches
+            state['provenance'][str(offset)] = dict(origin=origin, audio_digest=digest)
             save(checkpoint, state)
             print(f'  {timestamp(offset)}: {len(state["results"][str(offset)])} candidate(s)', flush=True)
         return True
 
     try:
+        if args.seed_cache:
+            for offset, matches in state['results'].items():
+                # Seed positive identifications only: old no-match timestamps
+                # are unknown and must not be made artificially fresh.
+                if not matches:
+                    continue
+                digest = audio_digest(sample(path, float(offset), args.sample_length))
+                cache.put(provider_key, digest, matches)
+            print('Seeded shared cache from existing matched samples.', flush=True)
+            return
         complete = run_offsets(offsets)
         if complete and args.refine:
             run_offsets(refinement_offsets(offsets, state['results'], args.min_score))
     finally:
+        cache.close()
         export(state, folder, args.min_score)
+        print(f'This run: {calls} provider requests, {hits} exact-audio cache hits.', flush=True)
         print(f'Review files: {folder}', flush=True)
 
 
@@ -299,6 +326,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path, help='Local media file or folder (searched recursively)')
     parser.add_argument('--output', type=Path, default=Path('scan_results'))
+    parser.add_argument('--cache', type=Path, help='Shared SQLite cache (default: OUTPUT/recognition-cache.sqlite3)')
+    parser.add_argument('--seed-cache', action='store_true', help='Index existing matched samples locally without provider requests')
     parser.add_argument('--config', type=Path, default=Path('config.ini'))
     parser.add_argument('--provider', choices=['acrcloud', 'shazam'], default='acrcloud')
     parser.add_argument('--interval', type=int, default=45, help='Seconds between baseline samples')
@@ -324,7 +353,7 @@ def main(argv=None):
             settings = None
         elif args.provider == 'shazam':
             try:
-                if not args.export_only:
+                if not args.export_only and not args.seed_cache:
                     import shazamio
             except ImportError:
                 raise ValueError('Install requirements-shazam.txt with Python 3.10+ first')
