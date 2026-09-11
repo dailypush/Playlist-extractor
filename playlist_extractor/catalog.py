@@ -1,6 +1,7 @@
 """Song grouping, playlist exports, and refinement planning."""
 import csv
 import json
+import os
 from pathlib import Path
 import re
 import unicodedata
@@ -106,7 +107,7 @@ def export(state, folder, threshold):
     sampling = state.get('sampling', {})
     source_path = identity.get('path')
     document = {
-        'schema_version': 1,
+        'schema_version': 2,
         'source': {
             'path': source_path,
             'filename': Path(source_path).name if source_path else None,
@@ -128,8 +129,13 @@ def export(state, folder, threshold):
             'matched_samples': sum(bool(matches) for matches in state['results'].values()),
         },
         'playlist': json_rows,
+        # Preserve original matches, no-matches, identity and cache provenance
+        # so this file can replace the checkpoint after a completed scan.
+        'scan_state': state,
     }
     temp = folder / 'playlist.json.tmp'
-    temp.write_text(json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False) + '\n', encoding='utf-8')
+    with temp.open('w', encoding='utf-8') as handle:
+        handle.write(json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
+        handle.flush()
+        os.fsync(handle.fileno())
     temp.replace(folder / 'playlist.json')
-

@@ -12,6 +12,7 @@ import wave
 
 from . import scanner
 from .locking import output_lock as batch_lock
+from .storage import load_state, retire_checkpoint
 
 
 class BatchPause(Exception):
@@ -24,11 +25,11 @@ def completed_output(entry, source, args):
         return False
     folder = Path(entry['output'])
     try:
-        state = json.loads((folder / 'checkpoint.json').read_text())
+        state = load_state(folder)
         playlist = json.loads((folder / 'playlist.json').read_text())
         identity, sampling = state['identity'], state['sampling']
         exported, recognition = playlist['source'], playlist['recognition']
-        return (
+        complete = (
             identity['path'] == exported['path'] == str(source)
             and identity['size'] == exported['size_bytes'] == entry['signature']['size']
             and identity['mtime_ns'] == exported['mtime_ns'] == entry['signature']['mtime_ns']
@@ -38,10 +39,14 @@ def completed_output(entry, source, args):
             and identity['sample_length'] == recognition['sample_length_seconds'] == 12
             and sampling['complete'] is True and recognition['sampling_complete'] is True
             and sampling['refinement_enabled'] == recognition['refinement_enabled'] == args.refine
-            and playlist['schema_version'] == 1
+            and playlist['schema_version'] == 2
+            and playlist['scan_state'] == state
             and isinstance(playlist['playlist'], list)
             and playlist['summary']['samples_processed'] == len(state['results'])
         )
+        if complete:
+            retire_checkpoint(state, folder)
+        return complete
     except (OSError, ValueError, KeyError, TypeError):
         return False
 

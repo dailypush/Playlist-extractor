@@ -77,7 +77,7 @@ class BatchTests(unittest.TestCase):
             self.assertEqual(scanner.main(self.args, event_handler=competing_batch), 0)
         self.assertEqual(attempted, [1])
 
-    def test_bad_completed_exports_are_rebuilt_without_requests(self):
+    def test_bad_completed_exports_with_checkpoint_are_rebuilt_without_requests(self):
         with patch.object(scanner, 'recognize', return_value=[track()]):
             self.assertEqual(batch.main(self.args), 0)
         folder = Path(next(iter(self.queue()['files'].values()))['output'])
@@ -85,6 +85,8 @@ class BatchTests(unittest.TestCase):
         checkpoint = folder / 'checkpoint.json'
         for damage in ('missing', 'invalid_json', 'wrong_source', 'incomplete', 'checkpoint_incomplete'):
             with self.subTest(damage=damage):
+                # Legacy/interrupted finalization still has a working checkpoint.
+                checkpoint.write_text(json.dumps(scanner.load_state(folder)))
                 document = json.loads(output.read_text())
                 if damage == 'missing':
                     output.unlink()
@@ -106,7 +108,8 @@ class BatchTests(unittest.TestCase):
                 repaired = json.loads(output.read_text())
                 self.assertTrue(repaired['recognition']['sampling_complete'])
                 self.assertEqual(repaired['source']['path'], str((self.media / 'a.mp4').resolve()))
-                self.assertTrue(json.loads(checkpoint.read_text())['sampling']['complete'])
+                self.assertTrue(scanner.load_state(folder)['sampling']['complete'])
+                self.assertFalse(checkpoint.exists())
 
     def test_extraction_timeout_keeps_saved_samples_and_continues(self):
         original_sample = scanner.sample

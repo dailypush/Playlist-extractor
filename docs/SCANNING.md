@@ -57,7 +57,9 @@ Each source gets a folder under `scan_results` with:
   evidence counts, alternate version titles, ISRC when supplied and review status.
 - `observations.csv`: individual sample timestamps, original candidate matches
   and explicit unmatched samples.
-- `checkpoint.json`: recognition results, source identity and scan progress.
+- `checkpoint.json`: working recognition results and progress, kept while a scan
+  is incomplete. After completion its metadata is verified in `playlist.json`
+  before this redundant working file is removed.
 
 JSON is generated automatically on scan completion, pause/error export, and
 `--export-only`. `schema_version` identifies the export format. Missing metadata
@@ -65,6 +67,22 @@ is `null`; scores and counts retain their numeric types, and versions/timestamps
 are arrays. Source paths refer to the environment that performed the scan (host
 or container); the file itself is not embedded. Paths can become stale if files
 are moved. File size and modification time are provenance, not a content hash.
+
+Schema version **2** adds `scan_state`, containing the original checkpoint's
+identity, sampling settings, all per-offset results (including no-matches), and
+provenance with exact-audio digests and provider/cache origins. This preserves
+provider track IDs, scores, ISRCs and any returned URLs without flattening them
+into the grouped playlist. Completed JSONs can independently support resume,
+cache seeding and regeneration of CSVs. Reports can read them without the MP4.
+
+Older checkpoints still load normally. Rebuild exports to migrate them without
+recognition calls: `python -m playlist_extractor scan twitch-pyka --export-only`.
+Completed checkpoints are removed only after the new JSON is successfully
+written and its embedded state verified. Incomplete checkpoints remain; a failed
+export retains its working checkpoint. Schema-1 exports without their original
+checkpoint cannot restore the missing raw evidence. Back up completed JSONs;
+they become the authoritative per-video records. The shared recognition cache
+and batch queue remain separate because they cover multiple recordings.
 
 Explicit remix/mix/edit/version labels are grouped; distinct artists and meaningful
 suffixes such as `(Part Two)` remain separate. The most frequently detected title

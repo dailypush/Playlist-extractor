@@ -17,6 +17,8 @@ class JsonExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             export(state, Path(temp), 80)
             result = json.loads((Path(temp) / 'playlist.json').read_text())
+        self.assertEqual(result['schema_version'], 2)
+        self.assertEqual(result['scan_state'], state)
         self.assertEqual(result['source']['path'], state['identity']['path'])
         self.assertEqual(result['source']['filename'], 'Pyka — Session.mp4')
         self.assertFalse(result['recognition']['sampling_complete'])

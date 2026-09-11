@@ -31,7 +31,16 @@ Generate reports without recognition requests:
 
 ```sh
 python3 session_report.py
+
+# A completed JSON can be moved or renamed and reported without its MP4.
+python3 session_report.py --input /archive/saved-session.json --output scan_results/reports
 ```
+
+Reports read schema-2 playlist JSONs and legacy/working checkpoints, deduplicating
+their evidence so an archived copy is not counted again. Schema-1 playlist
+exports alone lack the raw evidence and are skipped in folder reports; preserve
+or migrate their original checkpoints. Working checkpoints take precedence over
+older exports in the same folder during an interrupted scan.
 
 The reports contain recording coverage, candidate song frequency across
 recordings, and pairwise playlist overlap. Currently a source file is one

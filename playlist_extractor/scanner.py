@@ -18,6 +18,7 @@ import wave
 from .cache import RecognitionCache, audio_digest, namespace
 from .locking import output_lock
 from .prefetch import SamplePreparation
+from .storage import load_state, retire_checkpoint
 
 from .catalog import song_key, write_csv, export, refinement_offsets, timestamp
 
@@ -152,14 +153,20 @@ def scan(path, args, settings, event_handler=None):
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:12]
     folder = args.output / f'{path.stem}-{key}'
     checkpoint = folder / 'checkpoint.json'
-    if (args.export_only or args.seed_cache) and not checkpoint.exists():
+    saved = checkpoint.exists() or (folder / 'playlist.json').exists()
+    if (args.export_only or args.seed_cache) and not saved:
         raise ValueError('No checkpoint for these source/settings; run a scan first')
+    if not saved and folder.exists():
+        raise ValueError('Saved scan metadata is missing; restore playlist.json or checkpoint.json before resuming')
     folder.mkdir(parents=True, exist_ok=True)
-    state = json.loads(checkpoint.read_text()) if checkpoint.exists() else dict(identity=identity, results={})
+    state = load_state(folder) if saved else dict(identity=identity, results={})
     if state['identity'] != identity:
         raise ValueError('Checkpoint does not match source/settings')
+    if not saved:
+        save(checkpoint, state)
     if args.export_only:
         export(state, folder, args.min_score)
+        retire_checkpoint(state, folder)
         emit('message', text=f'Rebuilt review files without recognition requests: {folder}')
         emit('exported', folder=str(folder))
         return
@@ -253,6 +260,7 @@ def scan(path, args, settings, event_handler=None):
     finally:
         cache.close()
         export(state, folder, args.min_score)
+        retire_checkpoint(state, folder)
         emit('message', text=f'This run: {calls} provider requests, {hits} exact-audio cache hits.')
         emit('message', text=f'Review files: {folder}')
         emit('exported', folder=str(folder))

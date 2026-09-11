@@ -74,8 +74,9 @@ class ThreadedScannerTests(unittest.TestCase):
             threaded_args = [str(self.source), '--output', str(self.root / 'threaded'), '--delay', '0', '--no-refine', '--threaded']
             self.assertEqual(scanner.main(threaded_args), 0)
             threaded = next((self.root / 'threaded').glob('*/playlist.json')).parent
-            for filename in ('playlist.json', 'playlist.csv', 'observations.csv', 'checkpoint.json'):
+            for filename in ('playlist.json', 'playlist.csv', 'observations.csv'):
                 self.assertEqual((original / filename).read_bytes(), (threaded / filename).read_bytes())
+            self.assertFalse((threaded / 'checkpoint.json').exists())
             api.reset_mock()
             with patch.object(scanner, 'sample', side_effect=AssertionError('Must reuse checkpoint')):
                 self.assertEqual(scanner.main(self.args + ['--threaded']), 0)
@@ -87,8 +88,8 @@ class ThreadedScannerTests(unittest.TestCase):
             args = [arg for arg in self.args if arg != '--no-refine'] + ['--threaded']
             self.assertEqual(scanner.main(args), 0)
             self.assertEqual(api.call_count, 1)
-            checkpoint = next((self.root / 'out').glob('*/checkpoint.json'))
-            self.assertEqual(len(json.loads(checkpoint.read_text())['results']), 7)
+            folder = next((self.root / 'out').glob('*/playlist.json')).parent
+            self.assertEqual(len(scanner.load_state(folder)['results']), 7)
         with patch.object(scanner, 'sample', side_effect=lambda p,o,l,**kw: fake_sample(p, o, l)), patch.object(scanner, 'recognize', return_value=[track()]) as api, patch.object(scanner.time, 'sleep') as pause:
             args = [str(self.source), '--output', str(self.root / 'paced'), '--delay', '3', '--no-refine', '--threaded']
             self.assertEqual(scanner.main(args), 0)

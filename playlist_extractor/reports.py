@@ -1,4 +1,4 @@
-"""Offline song recurrence and recording-overlap reports from scan checkpoints."""
+"""Offline song recurrence and recording-overlap reports from playlists and checkpoints."""
 import argparse
 from collections import defaultdict
 from itertools import combinations
@@ -7,14 +7,14 @@ import hashlib
 from pathlib import Path
 
 from .catalog import song_key, write_csv
+from .storage import report_states
 
 
 def build_report(root, output):
     # Separate replaced files before choosing the most extensive settings scan.
     # These are provisional recording identities, not Twitch session IDs.
     selected = {}
-    for path in sorted(root.rglob('checkpoint.json')):
-        state = json.loads(path.read_text())
+    for state in report_states(root):
         identity = state['identity']
         if identity.get('provider') == 'shazam' and identity.get('version', 0) < 2:
             continue  # Discard the known-bad early decoder experiment.

@@ -109,8 +109,10 @@ class ScannerTests(unittest.TestCase):
             with patch.object(scanner, 'duration', return_value=60), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner.shutil, 'which', return_value='/tool'):
                 with patch.object(scanner, 'recognize', return_value=[]):
                     self.assertEqual(scanner.main(args + ['--no-refine']), 0)
-                checkpoint = next((Path(temp) / 'out').glob('*/checkpoint.json'))
-                self.assertTrue(json.loads(checkpoint.read_text())['sampling']['complete'])
+                folder = next((Path(temp) / 'out').glob('*/playlist.json')).parent
+                checkpoint = folder / 'checkpoint.json'
+                self.assertTrue(scanner.load_state(folder)['sampling']['complete'])
+                self.assertFalse(checkpoint.exists())
                 with patch.object(scanner, 'recognize', side_effect=OSError('offline')):
                     self.assertEqual(scanner.main(args), 1)
                 self.assertFalse(json.loads(checkpoint.read_text())['sampling']['complete'])

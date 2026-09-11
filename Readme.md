@@ -47,13 +47,19 @@ also provides `playlist-scan`, `playlist-report` and `playlist-ui` commands.
 
 ## Results
 
-`scan_results/<recording>-<identity>/` holds `playlist.json`, `playlist.csv`, `observations.csv`,
-and the resumable `checkpoint.json`. The playlist groups versions of a song,
+`scan_results/<recording>-<identity>/` holds `playlist.json`, `playlist.csv`, and `observations.csv`.
+An active or interrupted scan also has a resumable `checkpoint.json`. On completion,
+its metadata is verified in `playlist.json` and the checkpoint is removed.
+The playlist groups versions of a song,
 retains alternate titles, and flags uncertainty. Timestamps indicate detections,
 not precise song boundaries. A completed sampling run can still miss tracks.
 
 `playlist.json` bundles the songs with the source MP4 path and filename, recording
 metadata, sampling settings and result counts for use by other applications.
+Schema version 2 also includes `scan_state`: all original detection/no-match
+results, provider IDs and cache digests. This JSON alone preserves the per-video
+evidence for reports, resume and rebuilding CSVs. The shared SQLite cache and
+multi-video batch queue remain separate. Keep a backup of your completed JSONs.
 
 The existing full scan snapshot is in `scan_results/full-session/`. Reports go
 to `scan_results/reports/`; each source file currently represents one recording,

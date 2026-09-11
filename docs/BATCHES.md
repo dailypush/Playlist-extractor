@@ -71,9 +71,13 @@ can change between invocations without creating another queue.
 - Ctrl+C and SIGTERM pause gracefully. A hard kill/power loss can leave an entry
   marked running; it is treated as pending on the next invocation. Per-sample
   checkpoints and the shared cache limit repeated recognition after interruption.
-- Completed entries are checked against their checkpoint and playlist.json.
-  Missing, invalid or incomplete exports are revisited to rebuild output using
-  saved samples. A damaged checkpoint requires review and is retained.
+- Completed entries are checked against the scan state embedded in playlist.json
+  (or a remaining legacy checkpoint). A valid completed JSON replaces the working
+  checkpoint. Older completed checkpoints are migrated when revisited. If a
+  checkpoint remains, missing/invalid exports can be rebuilt from it. If the only
+  saved JSON is damaged, restore a backup before resuming; it is not silently
+  replaced by fresh recognition. The shared batch queue remains for file statuses
+  and request budgets; it does not need to hold the individual detection results.
 
 Each invocation reports completed/failed files, new requests and cache hits. A
 normal request/time-budget pause exits 0 with queue status `paused`; errors exit 1,
