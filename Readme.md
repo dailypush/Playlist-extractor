@@ -1,5 +1,12 @@
 # Video to Playlist
 
+For long local DJ recordings, use the new resumable scanner documented in
+[SCANNING.md](SCANNING.md). It samples directly with FFmpeg and exports timestamped
+observations and a reviewable playlist using ACRCloud. Start with
+`python3 scan_streams.py "/path/to/recording.mp4" --dry-run`.
+
+The instructions below describe the legacy script and may be outdated.
+
 This script processes MP4 video files and generates CSV playlists of songs identified throughout the videos. It uses the Shazam API to recognize songs in the video files and outputs a CSV file containing song titles and artist names for each video.
 
 ## Requirements

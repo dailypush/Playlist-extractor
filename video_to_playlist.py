@@ -56,6 +56,7 @@ def split_audio(audio_path, chunk_length=20000):
 
     return segments
 
+
 def create_acrcloud_request_data(segment):
     segment.export("temp_audio_segment.wav", format="wav")
     f = open("temp_audio_segment.wav", "rb")
@@ -96,20 +97,37 @@ def create_acrcloud_request_data(segment):
 
     return files, data
 
+
 def send_acrcloud_request(files, data):
     requrl = "https://" + acrcloud_config["host"]
-    
+
     # Print the request data before sending
     print(f"Sending request to ACRCloud with data: {data}")
-    
+
     r = requests.post(requrl, files=files, data=data)
     r.encoding = "utf-8"
     result = r.text
-    
+    print(f"ACRCloud response: {result}")
+
     # Close the file after the request is completed
     files[0][1][1].close()
 
     return json.loads(result)
+
+    requrl = "https://" + acrcloud_config["host"]
+
+    # Print the request data before sending
+    print(f"Sending request to ACRCloud with data: {data}")
+
+    r = requests.post(requrl, files=files, data=data)
+    r.encoding = "utf-8"
+    result = r.text
+
+    # Close the file after the request is completed
+    files[0][1][1].close()
+
+    return json.loads(result)
+
 
 def process_acrcloud_result(result):
     if result['status']['msg'] == 'Success':
@@ -119,12 +137,13 @@ def process_acrcloud_result(result):
     else:
         return None
 
+
 def identify_songs(segments):
     identified_songs = []
 
     for idx, segment in enumerate(segments):
         logger.info(f"Identifying song for segment {idx + 1}/{len(segments)}")
-        
+
         files, data = create_acrcloud_request_data(segment)
         result = send_acrcloud_request(files, data)
         song_id = process_acrcloud_result(result)
@@ -133,12 +152,15 @@ def identify_songs(segments):
             identified_songs.append(song_id)
             logger.info(f"Identified song: '{song_id[0]}' by {song_id[1]}")
         else:
-            logger.error(f"Error on segment {idx + 1}/{len(segments)}: {result}")
+            logger.error(
+                f"Error on segment {idx + 1}/{len(segments)}: {result}")
 
     if os.path.exists("temp_audio_segment.wav"):
         os.remove("temp_audio_segment.wav")
 
     return identified_songs
+
+
 def generate_csv(identified_songs, output_csv):
     logger.info(f"Generating CSV playlist: {output_csv}")
     with open(output_csv, mode='w', newline='', encoding='utf-8') as csvfile:
