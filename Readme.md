@@ -1,10 +1,22 @@
 # Twitch Playlist Extractor
 
 Identify songs in local DJ recordings, review timestamped matches, and compare
-recordings. ShazamIO and ACRCloud are supported. Scans resume from checkpoints
+recordings. Recognition uses ShazamIO; no API account or credentials are required. Scans resume from checkpoints
 and reuse identical audio through a shared SQLite cache.
 
 ## Quick start
+
+Launch the interactive terminal app after installation:
+
+```sh
+.venv/bin/python -m playlist_extractor ui
+```
+
+Select recordings, scan/resume with live progress, browse playlists, rebuild
+exports, seed the cache, or generate reports from one menu. Settings include
+source/output paths, sample spacing, request pacing and a request cap.
+Ctrl+C during recognition pauses the scan and returns to the menu with results
+saved. See [Terminal app](docs/TERMINAL.md) for local and Docker usage.
 
 Requires Python 3.11+ and FFmpeg/ffprobe on PATH. On macOS, install FFmpeg with
 `brew install ffmpeg` if needed.
@@ -14,26 +26,24 @@ python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
 # Estimate work without contacting a recognition service.
-.venv/bin/python -m playlist_extractor scan twitch-pyka --provider shazam --dry-run
+.venv/bin/python -m playlist_extractor scan twitch-pyka --dry-run
 
 # Scan or resume. Requests are sequential with a three-second pause by default.
-.venv/bin/python -m playlist_extractor scan twitch-pyka --provider shazam
+.venv/bin/python -m playlist_extractor scan twitch-pyka
 
 # Rebuild exports and reports locally, without recognition requests.
-.venv/bin/python -m playlist_extractor scan twitch-pyka --provider shazam --export-only
+.venv/bin/python -m playlist_extractor scan twitch-pyka --export-only
 .venv/bin/python -m playlist_extractor report
 ```
 
 Add `--max-requests 20` for a limited batch. Source can be a local file or folder.
 ShazamIO is unofficial; scans stop on provider errors without automatic retries.
-For ACRCloud, use `--provider acrcloud` and configure environment variables or
-copy `config.example.ini` to `config.ini` and enter your project credentials.
-An existing config.ini should not be overwritten. ACRCloud remains the default
-provider for compatibility; specify Shazam explicitly.
+Shazam is the default and only active recognition provider. Existing local
+config files are no longer read. Historical checkpoints remain available for reports.
 
 The original `python scan_streams.py ...` and `python session_report.py ...`
 commands still work. Optional installation with `pip install -e '.[shazam]'`
-also provides `playlist-scan` and `playlist-report` commands.
+also provides `playlist-scan`, `playlist-report` and `playlist-ui` commands.
 
 ## Results
 

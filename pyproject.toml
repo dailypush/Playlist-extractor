@@ -15,6 +15,7 @@ shazam = ["shazamio==0.8.1"]
 [project.scripts]
 playlist-scan = "playlist_extractor.scanner:main"
 playlist-report = "playlist_extractor.reports:main"
+playlist-ui = "playlist_extractor.terminal:main"
 
 [tool.setuptools.packages.find]
 include = ["playlist_extractor*"]

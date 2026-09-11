@@ -1,0 +1,12 @@
+services:
+  playlist:
+    build:
+      context: .
+      dockerfile: dockerfile
+    image: playlist-extractor:local
+    stdin_open: true
+    tty: true
+    command: ["ui", "--source", "/media", "--output", "/results"]
+    volumes:
+      - ./twitch-pyka:/media:ro
+      - ./scan_results:/results

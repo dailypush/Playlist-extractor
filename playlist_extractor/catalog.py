@@ -26,7 +26,7 @@ def confident_ids(matches, threshold):
 
 
 def usable_match(match, threshold):
-    # Shazam has no equivalent numeric confidence score. Keep it blank and
+    # Shazam has no numeric confidence score. Keep it blank and
     # use repeat detections as evidence instead of inventing a score.
     return match['score'] is None or match['score'] >= threshold
 

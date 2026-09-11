@@ -1,14 +1,10 @@
-"""Resumable Shazam and ACRCloud scanning of local DJ recordings."""
+"""Resumable Shazam scanning of local DJ recordings."""
 import argparse
 import asyncio
-import base64
-import configparser
 import hashlib
-import hmac
 import io
 import json
 import math
-import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -16,9 +12,6 @@ import subprocess
 import sys
 import time
 import tempfile
-import urllib.error
-import urllib.request
-import uuid
 import wave
 from .cache import RecognitionCache, audio_digest, namespace
 
@@ -45,67 +38,9 @@ def sample(path, offset, length):
                           capture_output=True, check=True).stdout
 
 
-def credentials(config_path, require_secret=True):
-    config = configparser.ConfigParser(interpolation=None)
-    config.read(config_path)
-    values = {}
-    for name, default in [('host', 'identify-eu-west-1.acrcloud.com'),
-                          ('access_key', ''), ('access_secret', '')]:
-        values[name] = os.environ.get('ACRCLOUD_' + name.upper()) or config.get(
-            'secrets', name, fallback=default)
-    if require_secret and (not values['access_key'] or not values['access_secret']):
-        raise ValueError('Set ACRCLOUD_ACCESS_KEY and ACRCLOUD_ACCESS_SECRET, or use config.ini')
-    host = values['host']
-    if not host.endswith('.acrcloud.com') or any(c in host for c in '/:@ '):
-        raise ValueError('ACRCLOUD_HOST must be an ACRCloud hostname, without https://')
-    return values
-
-
 def recognize(audio, settings):
-    if settings.get('provider') == 'shazam':
-        return recognize_shazam(audio)
-    timestamp = str(int(time.time()))
-    signed = '\n'.join(['POST', '/v1/identify', settings['access_key'], 'audio', '1', timestamp])
-    signature = base64.b64encode(hmac.new(settings['access_secret'].encode(),
-                                         signed.encode(), hashlib.sha1).digest()).decode()
-    fields = dict(access_key=settings['access_key'], sample_bytes=str(len(audio)),
-                  timestamp=timestamp, signature=signature, data_type='audio', signature_version='1')
-    boundary = uuid.uuid4().hex
-    body = bytearray()
-    for key, value in fields.items():
-        body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'.encode())
-    body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="sample"; filename="sample.wav"\r\nContent-Type: audio/wav\r\n\r\n'.encode())
-    body.extend(audio)
-    body.extend(f'\r\n--{boundary}--\r\n'.encode())
-    request = urllib.request.Request('https://' + settings['host'] + '/v1/identify',
-                                     data=bytes(body), headers={
-                                         'Content-Type': 'multipart/form-data; boundary=' + boundary})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        result = json.load(response)
-    code = result.get('status', {}).get('code')
-    if code == 1001:
-        return []
-    if code != 0:
-        reasons = {
-            3001: 'Wrong Access Key; check the project access key and matching regional host',
-            3003: 'Request count limit exceeded; check the account quota',
-            3014: 'Invalid signature; check the project access secret',
-            3015: 'Requests per second limit exceeded; increase --delay',
-        }
-        reason = reasons.get(code, 'check credentials, project and quota')
-        raise RuntimeError(f'ACRCloud returned status {code}: {reason}')
-    matches = []
-    for track in result.get('metadata', {}).get('music', []):
-        artists = ', '.join(a['name'] for a in track.get('artists', []))
-        title = track.get('title', '')
-        matches.append(dict(id=track.get('acrid') or f'{artists.casefold()}|{title.casefold()}',
-                            title=title, artist=artists, score=track.get('score', 0),
-                            isrc=normalize_isrc(track.get('external_ids', {}).get('isrc'))))
-    return matches
-
-
-def normalize_isrc(value):
-    return value if isinstance(value, str) else ','.join(value or [])
+    """Provider boundary retained for future recognition backends."""
+    return recognize_shazam(audio)
 
 
 def parse_shazam(result):
@@ -122,9 +57,12 @@ def parse_shazam(result):
 
 
 def recognize_shazam(audio):
-    from shazamio import Shazam
-    from shazamio.client import HTTPClient
-    from aiohttp_retry import ExponentialRetry
+    try:
+        from shazamio import Shazam
+        from shazamio.client import HTTPClient
+        from aiohttp_retry import ExponentialRetry
+    except ImportError as error:
+        raise RuntimeError('Install requirements-shazam.txt with Python 3.11+ first') from error
 
     async def identify():
         # A named WAV gives the decoder a format hint. Rewrite FFmpeg's pipe
@@ -151,23 +89,25 @@ def save(path, data):
     temp.replace(path)
 
 
-def scan(path, args, settings):
+def scan(path, args, settings, event_handler=None):
+    def emit(kind, **data):
+        if event_handler:
+            event_handler(dict(kind=kind, source=str(path), **data))
+        elif kind == 'message':
+            print(data['text'], flush=True)
     if not args.export_only and not args.seed_cache:
         seconds = duration(path)
         offsets = [float(i) for i in range(0, math.ceil(seconds), args.interval)
                    if seconds - i >= args.sample_length]
         if not offsets:
             raise ValueError(f'{path.name}: shorter than the sample length')
-        print(f'{path.name}: {timestamp(seconds)}, {len(offsets)} baseline checks, '
-              f'up to {len(offsets) - 1 if args.refine else 0} extra checks', flush=True)
+        emit('message', text=f'{path.name}: {timestamp(seconds)}, {len(offsets)} baseline checks, '
+             f'up to {len(offsets) - 1 if args.refine else 0} extra checks')
     if args.dry_run:
         return
     stat = path.stat()
     identity = dict(path=str(path.resolve()), size=stat.st_size, mtime_ns=stat.st_mtime_ns,
-                    interval=args.interval, sample_length=args.sample_length, host=settings['host'], version=1)
-    if args.provider == 'shazam':
-        identity['provider'] = 'shazam'
-        identity['version'] = 2
+                    interval=args.interval, sample_length=args.sample_length, host='shazam', version=2, provider='shazam')
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:12]
     folder = args.output / f'{path.stem}-{key}'
     checkpoint = folder / 'checkpoint.json'
@@ -179,29 +119,41 @@ def scan(path, args, settings):
         raise ValueError('Checkpoint does not match source/settings')
     if args.export_only:
         export(state, folder, args.min_score)
-        print(f'Rebuilt review files without recognition requests: {folder}', flush=True)
+        emit('message', text=f'Rebuilt review files without recognition requests: {folder}')
+        emit('exported', folder=str(folder))
         return
     calls = 0
     hits = 0
     cache = RecognitionCache(args.cache or args.output / 'recognition-cache.sqlite3')
     provider_key = namespace(identity)
     state.setdefault('provenance', {})
+    known_songs = {song_key(m) for matches in state['results'].values() for m in matches}
+    resumed = len(state['results'])
 
-    def run_offsets(positions):
+    def run_offsets(positions, phase):
         nonlocal calls, hits
+        done = sum(str(offset) in state['results'] for offset in positions)
+        def progress(**extra):
+            emit('progress', phase=phase, done=done, total=len(positions),
+                 requests=calls, cache_hits=hits, resumed=resumed,
+                 songs=len(known_songs), **extra)
+        progress(activity='Starting phase')
         for offset in positions:
             if str(offset) in state['results']:
                 continue
+            progress(activity='Extracting audio', offset=offset)
             audio = sample(path, offset, args.sample_length)
             digest = audio_digest(audio)
             matches = cache.get(provider_key, digest)
             if matches is None:
                 if args.max_requests is not None and calls >= args.max_requests:
-                    print('Request limit reached; rerun to resume.', flush=True)
+                    emit('message', text='Request limit reached; rerun to resume.')
                     return False
                 if calls:
+                    progress(activity='Pacing requests', offset=offset)
                     time.sleep(args.delay)
                 calls += 1
+                progress(activity='Recognizing audio', offset=offset)
                 matches = recognize(audio, settings)
                 cache.put(provider_key, digest, matches)
                 origin = 'provider'
@@ -211,7 +163,11 @@ def scan(path, args, settings):
             state['results'][str(offset)] = matches
             state['provenance'][str(offset)] = dict(origin=origin, audio_digest=digest)
             save(checkpoint, state)
-            print(f'  {timestamp(offset)}: {len(state["results"][str(offset)])} candidate(s)', flush=True)
+            known_songs.update(song_key(m) for m in matches)
+            done += 1
+            progress(activity='Sample saved', offset=offset, matches=matches, origin=origin)
+            if not event_handler:
+                print(f'  {timestamp(offset)}: {len(matches)} candidate(s)', flush=True)
         return True
 
     try:
@@ -221,30 +177,43 @@ def scan(path, args, settings):
                 # are unknown and must not be made artificially fresh.
                 if not matches:
                     continue
-                digest = audio_digest(sample(path, float(offset), args.sample_length))
-                cache.put(provider_key, digest, matches)
-            print('Seeded shared cache from existing matched samples.', flush=True)
+                provenance = state['provenance'].get(offset, {})
+                digest = provenance.get('audio_digest')
+                if digest is None:
+                    digest = audio_digest(sample(path, float(offset), args.sample_length))
+                    state['provenance'][offset] = dict(origin='checkpoint', audio_digest=digest)
+                if cache.get(provider_key, digest) is None:
+                    cache.put(provider_key, digest, matches)
+            save(checkpoint, state)
+            emit('message', text='Seeded shared cache from existing matched samples.')
             return
-        complete = run_offsets(offsets)
-        if complete and args.refine:
-            complete = run_offsets(refinement_offsets(offsets, state['results'], args.min_score))
+        # An earlier baseline-only run may be complete while this run's new
+        # refinement settings are not. Persist that distinction before requests.
         state['sampling'] = dict(duration_seconds=seconds, baseline_samples=len(offsets),
-                                 refinement_enabled=args.refine, complete=complete)
+                                 refinement_enabled=args.refine, min_score=args.min_score,
+                                 complete=False)
         save(checkpoint, state)
+        complete = run_offsets(offsets, 'Baseline')
+        if complete and args.refine:
+            complete = run_offsets(refinement_offsets(offsets, state['results'], args.min_score), 'Refinement')
+        state['sampling']['complete'] = complete
+        save(checkpoint, state)
+        emit('finished', complete=complete, requests=calls, cache_hits=hits,
+             resumed=resumed, songs=len(known_songs))
     finally:
         cache.close()
         export(state, folder, args.min_score)
-        print(f'This run: {calls} provider requests, {hits} exact-audio cache hits.', flush=True)
-        print(f'Review files: {folder}', flush=True)
+        emit('message', text=f'This run: {calls} provider requests, {hits} exact-audio cache hits.')
+        emit('message', text=f'Review files: {folder}')
+        emit('exported', folder=str(folder))
 
 
-def main(argv=None):
+def main(argv=None, event_handler=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path, help='Local media file or folder (searched recursively)')
     parser.add_argument('--output', type=Path, default=Path('scan_results'))
     parser.add_argument('--cache', type=Path, help='Shared SQLite cache (default: OUTPUT/recognition-cache.sqlite3)')
-    parser.add_argument('--config', type=Path, default=Path('config.ini'))
-    parser.add_argument('--provider', choices=['acrcloud', 'shazam'], default='acrcloud')
+    parser.add_argument('--provider', choices=['shazam'], default='shazam', help=argparse.SUPPRESS)
     parser.add_argument('--interval', type=int, default=45, help='Seconds between baseline samples')
     parser.add_argument('--sample-length', type=int, default=12, choices=range(5, 16), metavar='5..15')
     parser.add_argument('--min-score', type=int, default=80, help='Review threshold, not a probability')
@@ -266,19 +235,9 @@ def main(argv=None):
     if not files or any(not p.is_file() for p in files):
         parser.error('No local media files found')
     try:
-        if args.dry_run:
-            settings = None
-        elif args.provider == 'shazam':
-            try:
-                if not args.export_only and not args.seed_cache:
-                    import shazamio
-            except ImportError:
-                raise ValueError('Install requirements-shazam.txt with Python 3.10+ first')
-            settings = dict(provider='shazam', host='shazam')
-        else:
-            settings = credentials(args.config, require_secret=False) if args.export_only or args.seed_cache else credentials(args.config)
+        settings = dict(provider='shazam', host='shazam')
         for path in files:
-            scan(path, args, settings)
+            scan(path, args, settings, event_handler=event_handler)
     except subprocess.CalledProcessError as error:
         detail = error.stderr or ''
         if isinstance(detail, bytes):

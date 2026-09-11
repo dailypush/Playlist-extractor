@@ -1,135 +1,78 @@
 # Scan local DJ recordings
 
-## Duplicate handling and quick exports
-
-The playlist groups the same normalized song title and artist into one row,
-including explicit remix, mix, edit, version and remaster labels. Different
-artists and meaningful title suffixes such as `(Part Two)` stay separate.
-This is a song-level playlist: distinct remixes may share a row. The most
-frequently detected title supplies the displayed title and ISRC; all returned
-titles remain in `versions_detected`. Conflicting versions get `review_versions`
-instead of an automatic confirmation. Each sample counts at most once per song.
-The timestamped observations preserve the original responses for review.
-
-Version-only changes no longer trigger extra transition samples. Baseline
-coverage is unchanged, so this saves requests without widening the sampling gaps.
-Rebuild exports from existing results without extracting samples or contacting Shazam:
+The scanner uses ShazamIO, with Python 3.11+ and FFmpeg/ffprobe. No API key,
+account or config file is required. Install with `pip install -r requirements.txt`.
 
 ```sh
-.venv/bin/python scan_streams.py twitch-pyka --provider shazam --export-only
+# Interactive terminal
+.venv/bin/python -m playlist_extractor ui
+
+# Estimate work without contacting Shazam
+.venv/bin/python scan_streams.py twitch-pyka --dry-run
+
+# Limited batch, or omit the cap to scan the full recording
+.venv/bin/python scan_streams.py twitch-pyka --max-requests 20
+
+# Rebuild exports from saved results without recognition or FFmpeg
+.venv/bin/python scan_streams.py twitch-pyka --export-only
 ```
 
-Use the same source and sampling settings as the original scan. This works on
-partial checkpoints too and does not use any recognition quota.
+Source can be one recording or a folder searched recursively. Rerun the same
+command to resume. The previous `--provider shazam` argument is accepted for
+compatibility but is no longer needed. Other providers and `--config` are not
+supported. Historical checkpoints and local config files are preserved; config
+files are not read by the active scanner.
 
-## Shazam option
+## Sampling and pacing
 
-Install ShazamIO in a separate environment (Python 3.11+):
+Samples are 12 seconds of mono audio every 45 seconds, extracted directly with
+FFmpeg without decoding the full recording into memory. A five-hour recording
+gets 400 baseline checks. A second pass samples midpoints when adjacent grouped
+songs differ or either sample is unmatched, adding at most 399 checks.
 
-```sh
-python3.11 -m venv .venv
-.venv/bin/pip install -r requirements-shazam.txt
-.venv/bin/python scan_streams.py twitch-pyka --provider shazam --max-requests 20 --delay 3
-```
+Requests are sequential with a three-second pause by default. Use `--delay` to
+adjust pacing, `--interval` for sampling density, or `--no-refine` for baseline
+checks only. `--max-requests` caps new requests per recording per invocation.
+Checkpoint reuse and exact-cache hits do not consume that limit.
 
-Shazam mode does not use ACRCloud credentials or quota. It uses ShazamIO's
-unofficial API to submit locally generated audio fingerprints to Shazam.
-Repeat the command to scan the next batch, or omit `--max-requests` for the full
-recording. ACRCloud remains available with `--provider acrcloud` (the default).
-Each provider uses separate checkpoints, so their results cannot be mixed.
+ShazamIO uses an unofficial service interface and submits locally generated
+fingerprints. Requests have a 45-second timeout and no automatic HTTP retries.
+Service errors stop the operation; completed samples are retained. Ctrl+C also
+keeps saved results. Avoid concurrent scans of the same source/output folder.
 
-Shazam does not supply an ACRCloud-style confidence score. Score fields stay
-blank; `supported` means the same Shazam track appeared in at least two samples.
-`confident_detections` counts only scored ACRCloud matches and remains zero for
-Shazam. Single detections remain marked `review`. Repeat detections do not
-establish that a particular remix/version is correct. Extra sampling checks
-changes in grouped songs or no-matches. Requests have a 45-second timeout,
-with no automatic HTTP retries; rerun after network or rate-limit errors.
+## Review files
 
-`scan_streams.py` is a compatibility entry point for `playlist_extractor/scanner.py`.
-The original prototype is preserved under `legacy/`. Python 3.11+ and FFmpeg
-(including ffprobe) are required for scanning. Shazam mode uses ShazamIO;
-ACRCloud and reporting use only the standard library.
+Each source gets a folder under `scan_results` with:
 
-## Start with a recording
+- `playlist.csv`: one row per normalized song/artist, first/last detections,
+  evidence counts, alternate version titles, ISRC when supplied and review status.
+- `observations.csv`: individual sample timestamps, original candidate matches
+  and explicit unmatched samples.
+- `checkpoint.json`: recognition results, source identity and scan progress.
 
-Estimate work without credentials, uploading audio, or making recognition requests:
+Explicit remix/mix/edit/version labels are grouped; distinct artists and meaningful
+suffixes such as `(Part Two)` remain separate. The most frequently detected title
+supplies the displayed title and ISRC. Alternate titles remain in `versions_detected`.
+Version-only changes do not trigger extra refinement checks.
 
-```sh
-python3 scan_streams.py "/path/to/recording.mp4" --dry-run
-```
+Shazam scores stay blank. `supported` means at least two detections;
+`review` means isolated evidence; `review_versions` flags conflicting versions.
+These are not manual confirmations. The legacy `confident_detections` column is
+retained for export compatibility and remains zero for unscored Shazam matches.
 
-The scanner reads the existing `config.ini` `[secrets]` section with `ACCESS_KEY`
-and `ACCESS_SECRET`. Alternatively set `ACRCLOUD_ACCESS_KEY` and
-`ACRCLOUD_ACCESS_SECRET` in your environment. Set `ACRCLOUD_HOST` to your project's
-recognition hostname if it differs from `identify-eu-west-1.acrcloud.com`.
-Use an ACRCloud project with the ACRCloud Music database enabled.
+Detection times are not exact song boundaries. Repeat plays of the same song
+share one playlist row, with their evidence retained in observations. Sampling
+can miss short appearances, edits, overlaps or songs absent from the catalog.
+The tail after the last scheduled sample can remain unsampled.
 
-Try a limited scan first (each request sends a short audio sample to ACRCloud
-and uses your account's recognition quota):
-
-```sh
-python3 scan_streams.py "/path/to/recording.mp4" --max-requests 20
-```
-
-Scan an entire folder, including subfolders:
-
-```sh
-python3 scan_streams.py "/path/to/recordings" --output scan_results
-```
-
-Rerun the same command to resume. Completed samples are saved after every
-response, including no-match responses. Network/API errors stop the run and
-remain eligible for retry. An interruption between a response and saving its
-checkpoint can cause that one request to repeat. Avoid running two scanners
-against the same source/output simultaneously.
-
-## Review the results
-
-Each source gets its own folder under `scan_results`:
-
-- `observations.csv`: all candidate matches in sample order, with timestamps,
-  scores and explicit unmatched samples. Multiple returned matches are retained.
-- `playlist.csv`: unique tracks in first-detected order, with first/last detection,
-  evidence counts, best score, ISRC when available, and review status.
-- `checkpoint.json`: cached recognition results for resuming and rebuilding exports.
-
-For ACRCloud, `supported` means at least two samples scored 80 or above.
-For Shazam, it means at least two detections. Conflicting titles/versions get
-`review_versions`; isolated or low-scoring tracks get `review`. Scores are provider scores, not probabilities;
-even supported tracks can be wrong. First/last detection times are evidence
-locations, **not song boundaries**. A song played again later is one playlist
-row; its individual appearances remain visible in observations.
-
-## Sampling and long recordings
-
-The default is 12 seconds of mono audio every 45 seconds, extracted directly
-with FFmpeg without decoding the full recording into memory. A five-hour file
-gets 400 baseline requests. A second pass samples the midpoint between adjacent
-baseline checks when their confident candidate sets differ or either is missing.
-This adds at most 399 requests for a five-hour file. Extra checks help investigate
-transitions and no-matches; they do not guarantee complete track coverage.
-
-Use `--interval 30` for denser coverage or `--no-refine` for baseline checks only.
-`--max-requests` caps new calls **per recording per invocation**, including extra
-checks. `--delay` controls seconds between requests (default: 3). Files run sequentially to
-bound memory and API traffic. Clips shorter than the sample length are rejected;
-the final fragment shorter than a full sample is skipped.
-
-Changing source path, size, modification time, interval, sample length or host
-creates a separate checkpoint. Changing `--min-score` reuses saved responses and
-rebuilds review statuses, with additional refinement where necessary.
-
-DJ overlaps, speech, muted sections, tempo/pitch changes, edits and tracks absent
-from the recognition catalog can produce missing or incorrect matches. Validate
-on a representative recording before processing the collection. This version
-exports CSV files and does not download Twitch VODs or publish streaming playlists.
+Changing source path, size, modification time, interval or sample length creates
+a separate checkpoint. Existing Shazam checkpoint identities and cache namespaces
+are unchanged by the removal of other providers.
 
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -v
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
-The tests use fake recognition responses; they do not consume API quota or
-measure recognition accuracy on real music.
+Tests use mocked recognition responses and do not consume service requests.

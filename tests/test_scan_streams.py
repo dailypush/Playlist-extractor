@@ -23,6 +23,15 @@ def fake_sample(path, offset, length):
 
 
 class ScannerTests(unittest.TestCase):
+    def test_removed_provider_is_rejected_and_default_uses_shazam(self):
+        with patch('sys.stderr', new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as error:
+                scanner.main(['unused.mp4', '--provider', 'acrcloud'])
+            self.assertEqual(error.exception.code, 2)
+        with patch.object(scanner, 'recognize_shazam', return_value=[]) as identify:
+            self.assertEqual(scanner.recognize(b'audio', {'provider': 'shazam'}), [])
+            identify.assert_called_once_with(b'audio')
+
     def test_merge_versions_without_losing_evidence(self):
         original = dict(track(), title='Breathe (feat. Jem Cooke)', isrc='original')
         remix = dict(track('remix'), title='Breathe (feat. Jem Cooke) [Eric Prydz Remix]', isrc='remix')
@@ -59,18 +68,33 @@ class ScannerTests(unittest.TestCase):
                 api.assert_not_called()
                 extract.assert_not_called()
 
-    def test_isrc_string_is_not_split_into_characters(self):
-        self.assertEqual(scanner.normalize_isrc('US1234567890'), 'US1234567890')
-        self.assertEqual(scanner.normalize_isrc(['US123', 'GB456']), 'US123,GB456')
-        self.assertEqual(scanner.normalize_isrc(None), '')
 
-    def test_offline_acr_settings_allow_missing_credentials(self):
-        with tempfile.TemporaryDirectory() as temp, patch.dict(scanner.os.environ, {}, clear=True):
-            settings = scanner.credentials(Path(temp) / 'absent.ini', require_secret=False)
-            self.assertEqual(settings['host'], 'identify-eu-west-1.acrcloud.com')
-            self.assertEqual(settings['access_key'], '')
-            with self.assertRaises(ValueError):
-                scanner.credentials(Path(temp) / 'absent.ini')
+    def test_seed_cache_reuses_saved_digests_without_extraction(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'mix.mp4'
+            source.touch()
+            args = [str(source), '--output', str(Path(temp) / 'out'), '--delay', '0']
+            with patch.object(scanner, 'duration', return_value=60), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner.shutil, 'which', return_value='/tool'), patch.object(scanner, 'recognize', return_value=[track()]):
+                self.assertEqual(scanner.main(args), 0)
+            with patch.object(scanner, 'sample') as extract, patch.object(scanner, 'recognize') as api, patch.object(scanner.shutil, 'which', return_value='/tool'):
+                self.assertEqual(scanner.main(args + ['--seed-cache']), 0)
+                extract.assert_not_called()
+                api.assert_not_called()
+
+    def test_failed_refinement_clears_old_completion_status(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'mix.mp4'
+            source.touch()
+            args = [str(source), '--output', str(Path(temp) / 'out'), '--delay', '0']
+            with patch.object(scanner, 'duration', return_value=60), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner.shutil, 'which', return_value='/tool'):
+                with patch.object(scanner, 'recognize', return_value=[]):
+                    self.assertEqual(scanner.main(args + ['--no-refine']), 0)
+                checkpoint = next((Path(temp) / 'out').glob('*/checkpoint.json'))
+                self.assertTrue(json.loads(checkpoint.read_text())['sampling']['complete'])
+                with patch.object(scanner, 'recognize', side_effect=OSError('offline')):
+                    self.assertEqual(scanner.main(args), 1)
+                self.assertFalse(json.loads(checkpoint.read_text())['sampling']['complete'])
+
 
     def test_shazam_matches_have_no_invented_score(self):
         match = scanner.parse_shazam({'matches': [{'id': '123'}], 'track': {
@@ -115,11 +139,10 @@ class ScannerTests(unittest.TestCase):
             source = Path(temp) / 'mix.mp4'
             source.touch()
             args = [str(source), '--output', str(Path(temp) / 'out'), '--delay', '0']
-            settings = dict(host='test.acrcloud.com', access_key='key', access_secret='secret')
-            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner, 'credentials', return_value=settings), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', side_effect=[[track()], OSError('network failure')]) as api:
+            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', side_effect=[[track()], OSError('network failure')]) as api:
                 self.assertEqual(scanner.main(args), 1)
                 self.assertEqual(api.call_count, 2)
-            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner, 'credentials', return_value=settings), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[track()]) as api:
+            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[track()]) as api:
                 self.assertEqual(scanner.main(args), 0)
                 self.assertEqual(api.call_count, 1)
 
@@ -128,30 +151,12 @@ class ScannerTests(unittest.TestCase):
             source = Path(temp) / 'mix.mp4'
             source.touch()
             args = [str(source), '--output', str(Path(temp) / 'out'), '--delay', '0', '--max-requests', '2']
-            settings = dict(host='test.acrcloud.com', access_key='key', access_secret='secret')
-            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner, 'credentials', return_value=settings), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[]) as api:
+            with patch.object(scanner, 'duration', return_value=100), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[]) as api:
                 self.assertEqual(scanner.main(args), 0)
                 self.assertEqual(api.call_count, 2)
                 self.assertEqual(scanner.main(args), 0)
                 self.assertEqual(api.call_count, 3)
 
-    def test_api_endpoint_and_status_handling(self):
-        settings = dict(host='test.acrcloud.com', access_key='key', access_secret='secret')
-        for code in (0, 1001, 3000, 3001):
-            response = io.BytesIO(json.dumps({'status': {'code': code}}).encode())
-            with patch.object(scanner.urllib.request, 'urlopen', return_value=response) as send:
-                if code == 3001:
-                    with self.assertRaisesRegex(RuntimeError, 'Wrong Access Key'):
-                        scanner.recognize(b'audio', settings)
-                elif code == 3000:
-                    with self.assertRaises(RuntimeError):
-                        scanner.recognize(b'audio', settings)
-                else:
-                    self.assertEqual(scanner.recognize(b'audio', settings), [])
-                request = send.call_args.args[0]
-                self.assertEqual(request.full_url, 'https://test.acrcloud.com/v1/identify')
-                self.assertIn(b'name="sample"', request.data)
-                self.assertNotIn(b'secret', request.data)
 
 
 if __name__ == '__main__':

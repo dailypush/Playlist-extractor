@@ -23,6 +23,10 @@ Seed the database from existing matched samples without contacting a provider:
 .venv/bin/python scan_streams.py twitch-pyka --provider shazam --seed-cache
 ```
 
+Seeding reuses saved audio digests where available, avoiding repeated decoding.
+Older matched samples without digests are decoded once and their digests saved.
+It does not replace an existing cached identification.
+
 Generate reports without recognition requests:
 
 ```sh

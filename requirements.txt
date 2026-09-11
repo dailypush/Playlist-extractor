@@ -1,2 +1,2 @@
-# Active Shazam scanner dependencies. ACRCloud/reporting use the standard library.
+# Active Shazam scanner dependencies. Offline reports use the standard library.
 -r requirements-shazam.txt
