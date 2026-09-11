@@ -24,12 +24,12 @@ partial checkpoints too and does not use any recognition quota.
 
 ## Shazam option
 
-Install ShazamIO in a separate environment (Python 3.10+, tested here with 3.11):
+Install ShazamIO in a separate environment (Python 3.11+):
 
 ```sh
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements-shazam.txt
-.venv/bin/python scan_streams.py twitch-pyka --provider shazam --max-requests 20 --delay 2
+.venv/bin/python scan_streams.py twitch-pyka --provider shazam --max-requests 20 --delay 3
 ```
 
 Shazam mode does not use ACRCloud credentials or quota. It uses ShazamIO's
@@ -46,9 +46,10 @@ establish that a particular remix/version is correct. Extra sampling checks
 changes in grouped songs or no-matches. Requests have a 45-second timeout,
 with no automatic HTTP retries; rerun after network or rate-limit errors.
 
-`scan_streams.py` is the new scanner. The original `video_to_playlist.py` is
-preserved. Python 3.9+ and FFmpeg (including ffprobe) are required; the new
-scanner uses only Python's standard library, so the old requirements are unnecessary.
+`scan_streams.py` is a compatibility entry point for `playlist_extractor/scanner.py`.
+The original prototype is preserved under `legacy/`. Python 3.11+ and FFmpeg
+(including ffprobe) are required for scanning. Shazam mode uses ShazamIO;
+ACRCloud and reporting use only the standard library.
 
 ## Start with a recording
 
@@ -93,8 +94,9 @@ Each source gets its own folder under `scan_results`:
   evidence counts, best score, ISRC when available, and review status.
 - `checkpoint.json`: cached recognition results for resuming and rebuilding exports.
 
-`supported` means at least two samples scored 80 or above for that track.
-Other tracks are marked `review`. Scores are provider scores, not probabilities;
+For ACRCloud, `supported` means at least two samples scored 80 or above.
+For Shazam, it means at least two detections. Conflicting titles/versions get
+`review_versions`; isolated or low-scoring tracks get `review`. Scores are provider scores, not probabilities;
 even supported tracks can be wrong. First/last detection times are evidence
 locations, **not song boundaries**. A song played again later is one playlist
 row; its individual appearances remain visible in observations.
@@ -110,7 +112,7 @@ transitions and no-matches; they do not guarantee complete track coverage.
 
 Use `--interval 30` for denser coverage or `--no-refine` for baseline checks only.
 `--max-requests` caps new calls **per recording per invocation**, including extra
-checks. `--delay` controls seconds between requests. Files run sequentially to
+checks. `--delay` controls seconds between requests (default: 3). Files run sequentially to
 bound memory and API traffic. Clips shorter than the sample length are rejected;
 the final fragment shorter than a full sample is skipped.
 
@@ -126,7 +128,7 @@ exports CSV files and does not download Twitch VODs or publish streaming playlis
 ## Tests
 
 ```sh
-python3 -m unittest -v test_scan_streams.py
+python3 -m unittest discover -s tests -v
 ```
 
 The tests use fake recognition responses; they do not consume API quota or

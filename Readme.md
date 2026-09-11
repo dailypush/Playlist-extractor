@@ -1,67 +1,76 @@
-# Video to Playlist
+# Twitch Playlist Extractor
 
-For long local DJ recordings, use the new resumable scanner documented in
-[SCANNING.md](SCANNING.md). It samples directly with FFmpeg and exports timestamped
-observations and a reviewable playlist using ACRCloud. Start with
-`python3 scan_streams.py "/path/to/recording.mp4" --dry-run`.
+Identify songs in local DJ recordings, review timestamped matches, and compare
+recordings. ShazamIO and ACRCloud are supported. Scans resume from checkpoints
+and reuse identical audio through a shared SQLite cache.
 
-The instructions below describe the legacy script and may be outdated.
+## Quick start
 
-This script processes MP4 video files and generates CSV playlists of songs identified throughout the videos. It uses the Shazam API to recognize songs in the video files and outputs a CSV file containing song titles and artist names for each video.
+Requires Python 3.11+ and FFmpeg/ffprobe on PATH. On macOS, install FFmpeg with
+`brew install ffmpeg` if needed.
 
-## Requirements
+```sh
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 
-- Python 3.9 or newer
-- FFmpeg (for the pydub library)
+# Estimate work without contacting a recognition service.
+.venv/bin/python -m playlist_extractor scan twitch-pyka --provider shazam --dry-run
 
-## Installation
+# Scan or resume. Requests are sequential with a three-second pause by default.
+.venv/bin/python -m playlist_extractor scan twitch-pyka --provider shazam
 
-1. Install the required Python libraries using the following command:
-
-```bash
-pip install -r requirements.txt
+# Rebuild exports and reports locally, without recognition requests.
+.venv/bin/python -m playlist_extractor scan twitch-pyka --provider shazam --export-only
+.venv/bin/python -m playlist_extractor report
 ```
 
-2. Install FFmpeg:
+Add `--max-requests 20` for a limited batch. Source can be a local file or folder.
+ShazamIO is unofficial; scans stop on provider errors without automatic retries.
+For ACRCloud, use `--provider acrcloud` and configure environment variables or
+copy `config.example.ini` to `config.ini` and enter your project credentials.
+An existing config.ini should not be overwritten. ACRCloud remains the default
+provider for compatibility; specify Shazam explicitly.
 
-- **macOS** (using Homebrew):
-  ```bash
-  brew install ffmpeg
-  ```
-- **Windows**: Download the FFmpeg build for Windows from https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z, extract the files to a folder, and add the `bin` folder to your system's `PATH` environment variable.
-- **Linux** (Ubuntu/Debian):
-  ```bash
-  sudo apt update
-  sudo apt install ffmpeg
-  ```
-- **Linux** (Fedora):
-  ```bash
-  sudo dnf install ffmpeg
-  ```
+The original `python scan_streams.py ...` and `python session_report.py ...`
+commands still work. Optional installation with `pip install -e '.[shazam]'`
+also provides `playlist-scan` and `playlist-report` commands.
 
-## Usage
+## Results
 
-Run the script with the path to the folder containing your MP4 video files as a command-line argument:
+`scan_results/<recording>-<identity>/` holds `playlist.csv`, `observations.csv`,
+and the resumable `checkpoint.json`. The playlist groups versions of a song,
+retains alternate titles, and flags uncertainty. Timestamps indicate detections,
+not precise song boundaries. A completed sampling run can still miss tracks.
 
-```bash
-python video_to_playlist.py path/to/your/folder
+The existing full scan snapshot is in `scan_results/full-session/`. Reports go
+to `scan_results/reports/`; each source file currently represents one recording,
+not necessarily an entire Twitch broadcast. Session metadata and play-level
+analytics are future work. The SQLite database currently stores recognition
+cache entries, not the proposed sessions/songs/plays schema.
+
+## Project layout
+
+```text
+playlist_extractor/   Scanner, cache, song grouping/exports, reports
+ tests/              Offline regression tests
+ docs/               Scanning, caching, reporting, and development guides
+ legacy/             Archived prototype and old setup files
+ twitch-pyka/        Local input recordings (ignored by Git)
+ scan_results/       Checkpoints, CSV exports, cache and reports (ignored)
 ```
 
-Replace `path/to/your/folder` with the path to the folder containing your MP4 video files. The script will process all MP4 files in the specified folder and generate a CSV playlist for each input video file with the same name but with a `.csv` extension.
+Recordings, results, credentials and virtual environments stay out of Git and
+Docker build contexts. The legacy prototype is retained for reference and is
+not used by the active commands.
 
-## Running with Docker
+- [Scanning guide](docs/SCANNING.md)
+- [Cache and reporting design](docs/REPORTING_AND_CACHE.md)
+- [Development and Docker](docs/DEVELOPMENT.md)
 
-1. Build the Docker image:
+## Tests
 
-```bash
-docker build -t video-to-playlist .
+```sh
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
-2. Run the script in a Docker container:
-
-```bash
-docker run -v <path/to/your/folder>:/app/data video-to-playlist
-```
-
-Replace `<path/to/your/folder>` with the path to your folder containing the MP4 video files. The script will process the MP4 files and generate CSV playlists in the same folder.
-```
+Tests are offline and do not consume recognition quota.

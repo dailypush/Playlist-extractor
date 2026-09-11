@@ -1,0 +1,9 @@
+*
+!dockerfile
+!requirements.txt
+!requirements-shazam.txt
+!playlist_extractor/
+!playlist_extractor/*.py
+!scan_streams.py
+!session_report.py
+!recognition_cache.py

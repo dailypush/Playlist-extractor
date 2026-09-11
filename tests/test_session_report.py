@@ -9,6 +9,25 @@ from test_scan_streams import track
 
 
 class ReportTests(unittest.TestCase):
+    def test_recording_id_stays_stable_when_another_recording_is_added(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            folder = root / 'z'
+            folder.mkdir()
+            state = dict(identity=dict(path='/z.mp4'), results={'0': [track()]})
+            (folder / 'checkpoint.json').write_text(json.dumps(state))
+            build_report(root, root / 'reports')
+            with (root / 'reports/recordings.csv').open() as f:
+                before = next(csv.DictReader(f))['recording_id']
+            folder = root / 'a'
+            folder.mkdir()
+            state['identity']['path'] = '/a.mp4'
+            (folder / 'checkpoint.json').write_text(json.dumps(state))
+            build_report(root, root / 'reports')
+            with (root / 'reports/recordings.csv').open() as f:
+                after = next(r['recording_id'] for r in csv.DictReader(f) if r['source'] == '/z.mp4')
+            self.assertEqual(before, after)
+
     def test_recurrence_does_not_count_samples_or_checkpoints_as_sessions(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

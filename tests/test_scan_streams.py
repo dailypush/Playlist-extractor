@@ -54,10 +54,23 @@ class ScannerTests(unittest.TestCase):
             # No shazamio installation is required for rebuilding exports.
             with patch.object(scanner, 'duration', return_value=60), patch.object(scanner, 'sample', side_effect=fake_sample), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize', return_value=[track()]), patch.dict('sys.modules', {'shazamio': object()}):
                 self.assertEqual(scanner.main(args), 0)
-            with patch.object(scanner, 'duration', return_value=60), patch.object(scanner.shutil, 'which', return_value='/bin/tool'), patch.object(scanner, 'recognize') as api, patch.object(scanner, 'sample') as extract, patch.dict('sys.modules', {'shazamio': None}):
+            with patch.object(scanner, 'duration', side_effect=AssertionError('No media probe needed')), patch.object(scanner.shutil, 'which', return_value=None), patch.object(scanner, 'recognize') as api, patch.object(scanner, 'sample') as extract, patch.dict('sys.modules', {'shazamio': None}):
                 self.assertEqual(scanner.main(args + ['--export-only']), 0)
                 api.assert_not_called()
                 extract.assert_not_called()
+
+    def test_isrc_string_is_not_split_into_characters(self):
+        self.assertEqual(scanner.normalize_isrc('US1234567890'), 'US1234567890')
+        self.assertEqual(scanner.normalize_isrc(['US123', 'GB456']), 'US123,GB456')
+        self.assertEqual(scanner.normalize_isrc(None), '')
+
+    def test_offline_acr_settings_allow_missing_credentials(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(scanner.os.environ, {}, clear=True):
+            settings = scanner.credentials(Path(temp) / 'absent.ini', require_secret=False)
+            self.assertEqual(settings['host'], 'identify-eu-west-1.acrcloud.com')
+            self.assertEqual(settings['access_key'], '')
+            with self.assertRaises(ValueError):
+                scanner.credentials(Path(temp) / 'absent.ini')
 
     def test_shazam_matches_have_no_invented_score(self):
         match = scanner.parse_shazam({'matches': [{'id': '123'}], 'track': {
