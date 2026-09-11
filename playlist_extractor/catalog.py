@@ -1,5 +1,7 @@
 """Song grouping, playlist exports, and refinement planning."""
 import csv
+import json
+from pathlib import Path
 import re
 import unicodedata
 
@@ -57,6 +59,7 @@ def write_csv(path, fields, rows):
 
 def export(state, folder, threshold):
     observations, playlist = [], {}
+    detection_times = {}
     for offset, matches in sorted(state['results'].items(), key=lambda item: float(item[0])):
         start = float(offset)
         common = dict(timestamp=timestamp(start), seconds=start)
@@ -67,6 +70,7 @@ def export(state, folder, threshold):
             observations.append(dict(common, title=match['title'], artist=match['artist'],
                                      score=match['score'], status='candidate' if usable_match(match, threshold) else 'review'))
             key = song_key(match)
+            detection_times.setdefault(key, set()).add(start)
             item = playlist.setdefault(key, dict(title=match['title'], artist=match['artist'],
                 first_detected=timestamp(start), last_detected=timestamp(start), detections=0,
                 confident_detections=0, best_score=None, isrc=match['isrc'], variants={}))
@@ -82,8 +86,8 @@ def export(state, folder, threshold):
             seen.add((key, match['title']))
             if match['score'] is not None:
                 item['best_score'] = max(item['best_score'] or 0, match['score'])
-    rows = []
-    for item in playlist.values():
+    rows, json_rows = [], []
+    for key, item in playlist.items():
         variants = item.pop('variants')
         title = max(variants, key=lambda t: variants[t]['count'])
         item['title'], item['isrc'] = title, variants[title]['isrc']
@@ -91,8 +95,41 @@ def export(state, folder, threshold):
         evidence = item['detections'] if item['best_score'] is None else item['confident_detections']
         status = 'review_versions' if len(variants) > 1 else 'supported' if evidence >= 2 else 'review'
         rows.append(dict(item, status=status))
+        times = sorted(detection_times[key])
+        json_rows.append(dict(item, status=status, versions_detected=list(variants),
+                              first_detected_seconds=times[0], last_detected_seconds=times[-1],
+                              detection_seconds=times))
     write_csv(folder / 'observations.csv', ['timestamp', 'seconds', 'title', 'artist', 'score', 'status'], observations)
     write_csv(folder / 'playlist.csv', ['title', 'artist', 'first_detected', 'last_detected',
               'detections', 'confident_detections', 'best_score', 'isrc', 'versions_detected', 'status'], rows)
-
+    identity = state.get('identity', {})
+    sampling = state.get('sampling', {})
+    source_path = identity.get('path')
+    document = {
+        'schema_version': 1,
+        'source': {
+            'path': source_path,
+            'filename': Path(source_path).name if source_path else None,
+            'size_bytes': identity.get('size'),
+            'mtime_ns': identity.get('mtime_ns'),
+            'duration_seconds': sampling.get('duration_seconds'),
+        },
+        'recognition': {
+            'provider': identity.get('provider'),
+            'sample_length_seconds': identity.get('sample_length'),
+            'sample_interval_seconds': identity.get('interval'),
+            'sampling_complete': sampling.get('complete'),
+            'refinement_enabled': sampling.get('refinement_enabled'),
+            'review_score_threshold': threshold,
+        },
+        'summary': {
+            'candidate_songs': len(json_rows),
+            'samples_processed': len(state['results']),
+            'matched_samples': sum(bool(matches) for matches in state['results'].values()),
+        },
+        'playlist': json_rows,
+    }
+    temp = folder / 'playlist.json.tmp'
+    temp.write_text(json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False) + '\n', encoding='utf-8')
+    temp.replace(folder / 'playlist.json')
 

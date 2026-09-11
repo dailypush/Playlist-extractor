@@ -44,11 +44,21 @@ keeps saved results. Avoid concurrent scans of the same source/output folder.
 
 Each source gets a folder under `scan_results` with:
 
+- `playlist.json`: playlist plus its source recording path, filename, file size,
+  modification time, known duration, scan settings and summary counts. Each song
+  includes numeric detection timestamps, review status and alternate versions.
 - `playlist.csv`: one row per normalized song/artist, first/last detections,
   evidence counts, alternate version titles, ISRC when supplied and review status.
 - `observations.csv`: individual sample timestamps, original candidate matches
   and explicit unmatched samples.
 - `checkpoint.json`: recognition results, source identity and scan progress.
+
+JSON is generated automatically on scan completion, pause/error export, and
+`--export-only`. `schema_version` identifies the export format. Missing metadata
+is `null`; scores and counts retain their numeric types, and versions/timestamps
+are arrays. Source paths refer to the environment that performed the scan (host
+or container); the file itself is not embedded. Paths can become stale if files
+are moved. File size and modification time are provenance, not a content hash.
 
 Explicit remix/mix/edit/version labels are grouped; distinct artists and meaningful
 suffixes such as `(Part Two)` remain separate. The most frequently detected title

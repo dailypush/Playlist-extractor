@@ -10,3 +10,16 @@ services:
     volumes:
       - ./twitch-pyka:/media:ro
       - ./scan_results:/results
+  batch:
+    build:
+      context: .
+      dockerfile: dockerfile
+    image: playlist-extractor:local
+    profiles: [batch]
+    init: true
+    restart: "no"
+    stop_grace_period: 60s
+    command: ["batch", "/media", "--output", "/results", "--max-requests", "500"]
+    volumes:
+      - ./twitch-pyka:/media:ro
+      - ./scan_results:/results

@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 
-from . import reports, scanner
+from . import batch, reports, scanner
 
 
 def clean(value):
@@ -204,12 +204,23 @@ def main(argv=None):
             print('\n1  Scan / resume recording       2  Estimate work (offline)\n'
                   '3  Browse playlists             4  Rebuild playlist exports\n'
                   '5  Seed recognition cache       6  Generate session reports\n'
-                  '7  Settings                     q  Quit')
+                  '7  Settings                     8  Run / resume batch\n'
+                  'q  Quit')
             action = input('\nChoose an action: ').strip().lower()
             if action == 'q':
                 return 0
             if action == '7':
                 settings(args)
+            elif action == '8':
+                cap = integer('Maximum new requests across this batch (0 = no cap)', args.limit or 500, 0)
+                command = [str(args.source), '--output', str(args.output), '--interval', str(args.interval),
+                           '--delay', str(args.delay), '--max-requests', str(cap)]
+                if not args.refine:
+                    command.append('--no-refine')
+                with ProgressDisplay() as display:
+                    code = batch.main(command, event_handler=display)
+                if code:
+                    print('Batch stopped or has failed files. See the queue summary above.')
             elif action == '3':
                 show_playlist(args.output)
             elif action == '6':
