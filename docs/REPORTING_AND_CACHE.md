@@ -36,8 +36,13 @@ python3 session_report.py
 The reports contain recording coverage, candidate song frequency across
 recordings, and pairwise playlist overlap. Currently a source file is one
 recording, not necessarily an entire Twitch session. They use one checkpoint
-per source path (the one with most samples), and include partial/uncertain
-detections. They cannot establish accurate play counts or true absences.
+per source path/size/modification-time combination (the one with most samples),
+so replacing an MP4 does not hide the new recording behind an older, longer scan.
+The recording CSV includes that file metadata. Recording IDs now incorporate
+this metadata; path-only legacy checkpoints retain their old IDs. Reports include
+partial/uncertain detections and cannot establish accurate play counts or true
+absences. Touching or renaming a file can still create another recording identity;
+stable Twitch session IDs remain necessary to reconcile such copies.
 
 ## Next: approximate acoustic fingerprints
 

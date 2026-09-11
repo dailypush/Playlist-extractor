@@ -3,6 +3,8 @@
 Run commands from the repository root. The active package is `playlist_extractor`:
 
 - `scanner.py`: media extraction, provider calls, resumable scan orchestration/CLI.
+- `batch.py`: persistent queues, shared request/time budgets and recovery.
+- `locking.py`: shared output lock for scan and batch commands.
 - `catalog.py`: song grouping, refinement planning, CSV exports.
 - `cache.py`: provider-scoped exact-PCM recognition cache.
 - `reports.py`: recording-level frequency and overlap reports.
@@ -27,7 +29,8 @@ change; reorganizing code should not cause a recording to be submitted again.
 
 Export-only mode needs the source file metadata to locate its checkpoint, but
 neither FFmpeg, provider credentials nor ShazamIO. Reports need only checkpoints.
-Do not run concurrent scanners against the same output/checkpoint. SQLite cache
+Scan and batch commands reject concurrent writers to the same output folder.
+Locks do not coordinate separate output folders sharing a cache. SQLite cache
 transactions are independent from checkpoint writes; a completed cached request
 can be reused if interrupted before checkpointing.
 

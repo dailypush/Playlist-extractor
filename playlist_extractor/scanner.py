@@ -1,6 +1,7 @@
 """Resumable Shazam scanning of local DJ recordings."""
 import argparse
 import asyncio
+from contextlib import nullcontext
 import hashlib
 import io
 import json
@@ -14,28 +15,40 @@ import time
 import tempfile
 import wave
 from .cache import RecognitionCache, audio_digest, namespace
+from .locking import output_lock
 
 from .catalog import song_key, write_csv, export, refinement_offsets, timestamp
 
 
 MEDIA = {'.mp4', '.mkv', '.mov', '.flv', '.ts', '.webm', '.mp3', '.m4a', '.wav', '.flac', '.ogg', '.aac'}
+PROBE_TIMEOUT = 60
+SAMPLE_TIMEOUT = 120
 
 
 def duration(path):
-    result = subprocess.run(['ffprobe', '-v', 'error', '-show_entries',
-                             'format=duration', '-of', 'json', str(path)],
-                            capture_output=True, check=True, text=True)
-    seconds = float(json.loads(result.stdout)['format']['duration'])
+    try:
+        result = subprocess.run(['ffprobe', '-v', 'error', '-show_entries',
+                                 'format=duration', '-of', 'json', str(path)],
+                                capture_output=True, check=True, text=True, timeout=PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(f'{path.name}: media probe timed out after {PROBE_TIMEOUT}s') from error
+    try:
+        seconds = float(json.loads(result.stdout)['format']['duration'])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f'{path.name}: media duration is missing or invalid') from error
     if not math.isfinite(seconds) or seconds <= 0:
         raise ValueError('Recording must have a finite, positive duration')
     return seconds
 
 
 def sample(path, offset, length):
-    return subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-ss', str(offset),
-                           '-i', str(path), '-t', str(length), '-vn', '-ac', '1',
-                           '-ar', '16000', '-f', 'wav', 'pipe:1'],
-                          capture_output=True, check=True).stdout
+    try:
+        return subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-ss', str(offset),
+                               '-i', str(path), '-t', str(length), '-vn', '-ac', '1',
+                               '-ar', '16000', '-f', 'wav', 'pipe:1'],
+                              capture_output=True, check=True, timeout=SAMPLE_TIMEOUT).stdout
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(f'{path.name}: audio extraction at {offset}s timed out after {SAMPLE_TIMEOUT}s') from error
 
 
 def recognize(audio, settings):
@@ -236,8 +249,9 @@ def main(argv=None, event_handler=None):
         parser.error('No local media files found')
     try:
         settings = dict(provider='shazam', host='shazam')
-        for path in files:
-            scan(path, args, settings, event_handler=event_handler)
+        with nullcontext() if args.dry_run else output_lock(args.output):
+            for path in files:
+                scan(path, args, settings, event_handler=event_handler)
     except subprocess.CalledProcessError as error:
         detail = error.stderr or ''
         if isinstance(detail, bytes):

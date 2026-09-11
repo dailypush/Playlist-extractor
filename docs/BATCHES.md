@@ -20,6 +20,9 @@ remove it deliberately. Default pacing is three seconds, with no automatic retri
 or increase in concurrency. There is no guaranteed safe quota for unofficial
 Shazam access. Requests already in flight may finish after a time limit; time
 limits are cooperative, not hard process deadlines.
+Media probing times out after 60 seconds and each audio extraction after 120
+seconds. A timed-out file is marked failed so later recordings can continue;
+use `--retry-failed` after checking the file or storage device.
 
 The terminal menu's **8 — Run / resume batch** uses the configured source/output
 paths, sample interval, pacing and refinement preference, and asks for the global
@@ -43,16 +46,18 @@ can change between invocations without creating another queue.
 - Ctrl+C and SIGTERM pause gracefully. A hard kill/power loss can leave an entry
   marked running; it is treated as pending on the next invocation. Per-sample
   checkpoints and the shared cache limit repeated recognition after interruption.
-- Completed entries with a missing playlist.json are revisited to rebuild output.
+- Completed entries are checked against their checkpoint and playlist.json.
+  Missing, invalid or incomplete exports are revisited to rebuild output using
+  saved samples. A damaged checkpoint requires review and is retained.
 
 Each invocation reports completed/failed files, new requests and cache hits. A
 normal request/time-budget pause exits 0 with queue status `paused`; errors exit 1,
 and interruptions exit 130. Inspect queue status to distinguish completion from a
 budget pause. Failed files require review before treating the batch as complete.
 
-An OS file lock prevents two batches from using the same output simultaneously.
-Do not run the single-file scanner alongside a batch on the same recordings, or
-run multiple output folders against Shazam to multiply throughput. Queue locking
+An OS file lock prevents scans, exports, cache seeding and batches from writing
+to the same output simultaneously. Dry runs do not need the lock.
+Do not run multiple output folders against Shazam to multiply throughput. Locking
 is supported on macOS/Linux, including Docker. Reports can be rebuilt afterward
 with `python -m playlist_extractor report`.
 

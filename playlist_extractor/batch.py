@@ -1,7 +1,5 @@
 """Persistent, sequential batches with a shared request budget and resumable files."""
 import argparse
-from contextlib import contextmanager
-import fcntl
 import hashlib
 import json
 import math
@@ -13,24 +11,39 @@ import time
 import wave
 
 from . import scanner
+from .locking import output_lock as batch_lock
 
 
 class BatchPause(Exception):
     pass
 
 
-@contextmanager
-def batch_lock(output):
-    output.mkdir(parents=True, exist_ok=True)
-    with (output / '.batch.lock').open('a') as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RuntimeError('Another batch is using this output folder')
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+def completed_output(entry, source, args):
+    """Only skip a file when its checkpoint and export agree with this run."""
+    if not entry.get('output'):
+        return False
+    folder = Path(entry['output'])
+    try:
+        state = json.loads((folder / 'checkpoint.json').read_text())
+        playlist = json.loads((folder / 'playlist.json').read_text())
+        identity, sampling = state['identity'], state['sampling']
+        exported, recognition = playlist['source'], playlist['recognition']
+        return (
+            identity['path'] == exported['path'] == str(source)
+            and identity['size'] == exported['size_bytes'] == entry['signature']['size']
+            and identity['mtime_ns'] == exported['mtime_ns'] == entry['signature']['mtime_ns']
+            and identity['provider'] == recognition['provider'] == 'shazam'
+            and identity['version'] == 2
+            and identity['interval'] == recognition['sample_interval_seconds'] == args.interval
+            and identity['sample_length'] == recognition['sample_length_seconds'] == 12
+            and sampling['complete'] is True and recognition['sampling_complete'] is True
+            and sampling['refinement_enabled'] == recognition['refinement_enabled'] == args.refine
+            and playlist['schema_version'] == 1
+            and isinstance(playlist['playlist'], list)
+            and playlist['summary']['samples_processed'] == len(state['results'])
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def discover(source):
@@ -81,7 +94,7 @@ def run(args, event_handler=None):
             queue['files'][str(path)] = dict(signature=signature, status='pending')
         elif entry['status'] in ('running', 'paused') or (args.retry_failed and entry['status'] == 'failed'):
             entry['status'] = 'pending'
-        elif entry['status'] == 'complete' and not (Path(entry.get('output', '')) / 'playlist.json').is_file():
+        elif entry['status'] == 'complete' and not completed_output(entry, path, args):
             entry['status'] = 'pending'
     queue['last_run'] = dict(status='running', requests=0, cache_hits=0)
     scanner.save(queue_path, queue)

@@ -9,6 +9,24 @@ from test_scan_streams import track
 
 
 class ReportTests(unittest.TestCase):
+    def test_replaced_source_preserves_both_recordings_and_deduplicates_settings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, mtime, results in (
+                ('old', 1, {'0': [track('old')], '45': [track('old')]}),
+                ('new', 2, {'0': [track('new')]}),
+                ('old-other-settings', 1, {'0': [track('old')]}),
+            ):
+                folder = root / name
+                folder.mkdir()
+                state = dict(identity=dict(path='/mix.mp4', size=123, mtime_ns=mtime), results=results)
+                (folder / 'checkpoint.json').write_text(json.dumps(state))
+            self.assertEqual(build_report(root, root / 'reports'), (2, 2))
+            with (root / 'reports/recordings.csv').open() as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len({row['recording_id'] for row in rows}), 2)
+            self.assertEqual({row['mtime_ns']: row['samples'] for row in rows}, {'1': '2', '2': '1'})
+
     def test_recording_id_stays_stable_when_another_recording_is_added(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

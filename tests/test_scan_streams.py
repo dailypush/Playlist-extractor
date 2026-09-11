@@ -2,6 +2,7 @@ import csv
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 import wave
@@ -23,6 +24,25 @@ def fake_sample(path, offset, length):
 
 
 class ScannerTests(unittest.TestCase):
+    def test_probe_rejects_missing_or_invalid_duration(self):
+        for payload in ({}, {'format': {}}, {'format': {'duration': 'N/A'}},
+                        {'format': {'duration': None}}, {'format': {'duration': 'NaN'}}):
+            with self.subTest(payload=payload), patch.object(scanner.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))):
+                with self.assertRaises(ValueError):
+                    scanner.duration(Path('mix.mp4'))
+
+    def test_media_processes_have_timeouts_and_use_recoverable_errors(self):
+        for operation, args, timeout in (
+            (scanner.duration, (Path('mix.mp4'),), scanner.PROBE_TIMEOUT),
+            (scanner.sample, (Path('mix.mp4'), 45, 12), scanner.SAMPLE_TIMEOUT),
+        ):
+            with self.subTest(operation=operation.__name__), patch.object(scanner.subprocess, 'run',
+                    side_effect=subprocess.TimeoutExpired('media tool', timeout)) as process:
+                with self.assertRaisesRegex(ValueError, 'timed out'):
+                    operation(*args)
+                self.assertEqual(process.call_args.kwargs['timeout'], timeout)
+
     def test_removed_provider_is_rejected_and_default_uses_shazam(self):
         with patch('sys.stderr', new_callable=io.StringIO):
             with self.assertRaises(SystemExit) as error:
