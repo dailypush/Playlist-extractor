@@ -1,5 +1,15 @@
 # Long recording batches
 
+For unattended native operation, use
+`python -m playlist_extractor.unattended SOURCE --output RESULTS`.
+It runs sequential 500-request batches with 15-minute breaks until completion.
+Service/network failures retry after 1, 2, 4, then at most 6 hours; successful
+batches reset the backoff. Failed media remain skipped and logged. Completion,
+including completion with failed files, stops the runner. SIGTERM/Ctrl+C stops
+it and its current batch gracefully. The dashboard shows scheduled resumes.
+The Raspberry Pi systemd service uses this mode; ordinary CLI and Docker batch
+commands retain their single-run behavior.
+
 Use a persistent batch for a large folder instead of launching parallel scans.
 It runs one recording and one Shazam request at a time, retaining the shared
 cache and each recording's original checkpoint/JSON/CSV outputs.

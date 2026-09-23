@@ -58,6 +58,21 @@ def matching_paths(output, source):
     return matched
 
 
+def automation_line(output):
+    try:
+        state = json.loads((output / 'unattended.json').read_text())
+        if state['status'] == 'waiting':
+            os.kill(state['pid'], 0)
+            minutes = max(0, int((state['next_run_at'] - time.time() + 59) // 60))
+            return f"AUTO RESUME in {minutes} min | {state.get('reason', 'Scheduled break')}"
+        if state['status'] == 'running':
+            os.kill(state['pid'], 0)
+            return 'UNATTENDED: automatic resume enabled | 15-minute breaks between batches'
+        return f"UNATTENDED: {state['status']}"
+    except (OSError, ValueError, KeyError, TypeError):
+        return ''
+
+
 def render(queue, path, alive=False, failures=False, scroll=0, now=None):
     """Return plain display lines, also used by --once and offline tests."""
     now = time.time() if now is None else now
@@ -145,6 +160,12 @@ def show(screen, output, source=None):
                 screen.addnstr(y, 0, line, max(0, width - 1), curses.A_BOLD if y in (0, 7) else curses.A_NORMAL)
             except curses.error:
                 pass
+        auto = automation_line(output)
+        if auto:
+            try:
+                screen.addnstr(max(0, height - 2), 0, clean(auto), max(0, width - 1), curses.A_BOLD)
+            except curses.error:
+                pass
         footer = 'q quit (scan continues) | f skipped/queue | arrows scroll | Tab batch'
         try:
             screen.addnstr(max(0, height - 1), 0, footer, max(0, width - 1), curses.A_REVERSE)
@@ -187,6 +208,9 @@ def main(argv=None):
             queue = load_queue(path)
             lines, _ = render(queue, path, worker_alive(output, queue.get('last_run', {})), args.failed)
             print('\n'.join(lines))
+            auto = automation_line(output)
+            if auto:
+                print(auto)
             return 0
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             parser.error('Dashboard needs a terminal; use --once for a snapshot.')

@@ -1,8 +1,7 @@
 [Unit]
-Description=Playlist extractor resumable batch
+Description=Playlist extractor unattended queue
 Wants=network-online.target
-After=network-online.target
-RequiresMountsFor=/mnt/playlist-videos
+After=network-online.target remote-fs.target
 
 [Service]
 Type=exec
@@ -12,8 +11,9 @@ WorkingDirectory=/opt/playlist-extractor
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/default/playlist-extractor
 ExecStartPre=/usr/bin/mountpoint -q /mnt/playlist-videos
-ExecStart=/opt/playlist-extractor/.venv/bin/python -m playlist_extractor batch ${PLAYLIST_SOURCE} --output /var/lib/playlist-extractor --max-requests 500
-Restart=no
+ExecStart=/opt/playlist-extractor/.venv/bin/python -m playlist_extractor.unattended ${PLAYLIST_SOURCE} --output /var/lib/playlist-extractor
+Restart=on-failure
+RestartSec=1h
 SuccessExitStatus=130
 TimeoutStopSec=180
 Nice=10
