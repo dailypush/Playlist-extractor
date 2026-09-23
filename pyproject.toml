@@ -17,6 +17,7 @@ playlist-scan = "playlist_extractor.scanner:main"
 playlist-report = "playlist_extractor.reports:main"
 playlist-ui = "playlist_extractor.terminal:main"
 playlist-batch = "playlist_extractor.batch:main"
+playlist-watch = "playlist_extractor.dashboard:main"
 
 [tool.setuptools.packages.find]
 include = ["playlist_extractor*"]

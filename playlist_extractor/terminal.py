@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 
-from . import batch, reports, scanner
+from . import batch, dashboard, reports, scanner
 
 
 def clean(value):
@@ -210,12 +210,14 @@ def main(argv=None):
                   '3  Browse playlists             4  Rebuild playlist exports\n'
                   '5  Seed recognition cache       6  Generate session reports\n'
                   '7  Settings                     8  Run / resume batch\n'
-                  'q  Quit')
+                  '9  Watch background batch       q  Quit')
             action = input('\nChoose an action: ').strip().lower()
             if action == 'q':
                 return 0
             if action == '7':
                 settings(args)
+            elif action == '9':
+                dashboard.main(['--output', str(args.output), '--source', str(args.source)])
             elif action == '8':
                 cap = integer('Maximum new requests across this batch (0 = no cap)', args.limit or 500, 0)
                 command = [str(args.source), '--output', str(args.output), '--interval', str(args.interval),

@@ -55,6 +55,19 @@ Prefetch errors are raised when that offset is reached, retaining earlier result
 
 ## Queue and recovery
 
+Monitor a background batch with `python -m playlist_extractor watch --output scan_results`.
+This read-only TUI can run alongside the scanner. It shows the current activity,
+sample progress, request budget, and upcoming queue. Use `f` for failed files,
+arrows to scroll, Tab for other batch queues, and `q` to quit the monitor only.
+Use `--once` for a plain snapshot or `--once --failed` for skipped-file details.
+Optionally filter queues with `--source /path/to/recordings`.
+
+Each batch keeps an append-only `skipped.jsonl` next to its queue with media
+failure details, including FFmpeg/ffprobe stderr, timeout/exit code, source path,
+timestamp and last sample progress. Previously saved failures are migrated with
+the details available from their queue. Service/network failures pause the
+batch and are not logged as skipped media. Dry runs remain read-only.
+
 `scan_results/batches/<batch-id>/queue.json` stores recording paths, file metadata,
 status, recent sample progress, output folders, and the last run's request/cache
 counts. Files transition through pending, running, complete, paused or failed.

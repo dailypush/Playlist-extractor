@@ -1,0 +1,27 @@
+[Unit]
+Description=Playlist extractor resumable batch
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/mnt/playlist-videos
+
+[Service]
+Type=exec
+User=playlist-extractor
+Group=playlist-extractor
+WorkingDirectory=/opt/playlist-extractor
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/default/playlist-extractor
+ExecStartPre=/usr/bin/mountpoint -q /mnt/playlist-videos
+ExecStart=/opt/playlist-extractor/.venv/bin/python -m playlist_extractor batch ${PLAYLIST_SOURCE} --output /var/lib/playlist-extractor --max-requests 500
+Restart=no
+SuccessExitStatus=130
+TimeoutStopSec=180
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/playlist-extractor
+
+[Install]
+WantedBy=multi-user.target

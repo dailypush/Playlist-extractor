@@ -127,6 +127,46 @@ class BatchTests(unittest.TestCase):
         state = json.loads((Path(entries[0]['output']) / 'checkpoint.json').read_text())
         self.assertEqual(list(state['results']), ['0.0'])
         self.assertFalse(state['sampling']['complete'])
+        failure = entries[0]['failure']
+        self.assertEqual(failure['category'], 'ffmpeg')
+        self.assertEqual(failure['timeout_seconds'], scanner.SAMPLE_TIMEOUT)
+        self.assertEqual(failure['progress']['offset'], 45)
+        log = next((self.root / 'out/batches').glob('*/skipped.jsonl'))
+        self.assertEqual(json.loads(log.read_text())['source'], str((self.media / 'a.mp4').resolve()))
+
+    def test_failure_log_preserves_stderr_and_history_without_relogging_skips(self):
+        error = subprocess.CalledProcessError(1, ['ffprobe', 'a.mp4'], stderr=b'moov atom not found\n')
+        with patch.object(scanner, 'duration', side_effect=[error, 60]), patch.object(scanner, 'recognize', return_value=[track()]):
+            self.assertEqual(batch.main(self.args), 1)
+        log = next((self.root / 'out/batches').glob('*/skipped.jsonl'))
+        record = json.loads(log.read_text())
+        self.assertEqual(record['stderr'], 'moov atom not found\n')
+        self.assertEqual(record['category'], 'ffprobe')
+        with patch.object(scanner, 'recognize', return_value=[track()]):
+            batch.main(self.args)
+            self.assertEqual(len(log.read_text().splitlines()), 1)
+            batch.main(self.args + ['--retry-failed'])
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+        self.assertEqual(self.queue()['files'][str((self.media / 'a.mp4').resolve())]['status'], 'complete')
+
+    def test_activity_saved_before_extraction_and_existing_failures_migrated(self):
+        observed = []
+        def sample(path, offset, length, **kwargs):
+            q = self.queue()
+            observed.append(q['files'][str(path)]['progress']['activity'])
+            return fake_sample(path, offset, length)
+        with patch.object(scanner, 'sample', side_effect=sample), patch.object(scanner, 'recognize', return_value=[track()]):
+            batch.main(self.args)
+        self.assertTrue(observed)
+        self.assertEqual(set(observed), {'Extracting audio'})
+        q = self.queue()
+        q['files'][str((self.media / 'a.mp4').resolve())].update(status='failed', error='legacy ffmpeg error')
+        queue_path = next((self.root / 'out/batches').glob('*/queue.json'))
+        scanner.save(queue_path, q)
+        batch.main(self.args)
+        record = json.loads(queue_path.with_name('skipped.jsonl').read_text())
+        self.assertTrue(record['historical'])
+        self.assertEqual(record['error'], 'legacy ffmpeg error')
 
     def test_dry_run_has_no_queue_or_provider_requests(self):
         with patch.object(scanner, 'recognize') as api:

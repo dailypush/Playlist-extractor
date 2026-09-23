@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+. /etc/default/playlist-extractor
+exec runuser -u playlist-extractor -- /opt/playlist-extractor/.venv/bin/python -m playlist_extractor watch --source "$PLAYLIST_SOURCE" --output /var/lib/playlist-extractor "$@"

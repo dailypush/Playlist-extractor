@@ -1,8 +1,10 @@
 """Persistent, sequential batches with a shared request budget and resumable files."""
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import signal
 import sqlite3
@@ -17,6 +19,31 @@ from .storage import load_state, retire_checkpoint
 
 class BatchPause(Exception):
     pass
+
+
+def log_failure(folder, path, entry, error=None):
+    """Keep an append-only audit trail, including decoder stderr and timeouts."""
+    cause = error
+    while cause is not None and cause.__cause__ is not None:
+        cause = cause.__cause__
+    command = getattr(cause, 'cmd', None)
+    program = Path(command[0] if isinstance(command, (list, tuple)) else str(command or '')).name
+    stderr = getattr(cause, 'stderr', '') or ''
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode('utf-8', errors='replace')
+    record = dict(time=datetime.now(timezone.utc).isoformat(), source=str(path),
+                  category=program if program in ('ffmpeg', 'ffprobe') else 'media_validation',
+                  error=str(error) if error is not None else entry.get('error', 'Previously failed'),
+                  stderr=stderr[-8192:], command=command,
+                  timeout_seconds=getattr(cause, 'timeout', None),
+                  returncode=getattr(cause, 'returncode', None),
+                  progress=entry.get('progress'), historical=error is None)
+    with (folder / 'skipped.jsonl').open('a', encoding='utf-8') as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + '\n')
+        handle.flush()
+        os.fsync(handle.fileno())
+    entry['failure'] = record
+    return record
 
 
 def completed_output(entry, source, args):
@@ -95,13 +122,18 @@ def run(args, event_handler=None):
         stat = path.stat()
         signature = dict(size=stat.st_size, mtime_ns=stat.st_mtime_ns)
         entry = queue['files'].get(str(path))
+        if entry and entry['status'] == 'failed' and not entry.get('failure'):
+            log_failure(folder, path, entry)
         if entry is None or entry['signature'] != signature:
             queue['files'][str(path)] = dict(signature=signature, status='pending')
         elif entry['status'] in ('running', 'paused') or (args.retry_failed and entry['status'] == 'failed'):
             entry['status'] = 'pending'
         elif entry['status'] == 'complete' and not completed_output(entry, path, args):
             entry['status'] = 'pending'
-    queue['last_run'] = dict(status='running', requests=0, cache_hits=0)
+    queue['active_files'] = [str(p) for p in files]
+    queue['last_run'] = dict(status='running', requests=0, cache_hits=0,
+                            started_at=time.time(), max_requests=args.max_requests,
+                            max_minutes=args.max_minutes, pid=os.getpid())
     scanner.save(queue_path, queue)
     message(f'Batch: {len(files)} recordings | queue: {queue_path} | request cap: {args.max_requests or "none"}')
     total_calls = total_hits = 0
@@ -118,7 +150,8 @@ def run(args, event_handler=None):
             if total_calls:
                 time.sleep(args.delay)  # Preserve pacing across recording boundaries.
             message(f'File {index}/{len(files)}: {path.name}')
-            entry.update(status='running', error=None)
+            entry.update(status='running', error=None, progress=None)
+            queue['last_run'].update(current=str(path), current_index=index, updated_at=time.time())
             scanner.save(queue_path, queue)
             calls = hits = 0
 
@@ -131,10 +164,10 @@ def run(args, event_handler=None):
                         raise BatchPause('Batch time limit reached')
                     calls = max(calls, event['requests'])
                     hits = max(hits, event['cache_hits'])
-                    entry['progress'] = {k: event[k] for k in ('phase', 'done', 'total', 'songs')}
-                    queue['last_run'].update(requests=total_calls + calls, cache_hits=total_hits + hits)
-                    if event['activity'] == 'Sample saved':
-                        scanner.save(queue_path, queue)
+                    entry['progress'] = {k: event[k] for k in ('phase', 'done', 'total', 'songs', 'activity', 'offset', 'resumed') if k in event}
+                    queue['last_run'].update(requests=total_calls + calls, cache_hits=total_hits + hits,
+                                             updated_at=time.time())
+                    scanner.save(queue_path, queue)
                     if not event_handler and event['activity'] == 'Sample saved':
                         message(f"  {event['phase']} {event['done']}/{event['total']} | {event['songs']} songs | batch requests {total_calls + calls}")
                 elif event['kind'] == 'finished':
@@ -155,6 +188,8 @@ def run(args, event_handler=None):
                 scanner.scan(path, scan_args, dict(provider='shazam', host='shazam'), event_handler=handle)
             except (subprocess.CalledProcessError, ValueError, wave.Error) as error:
                 entry.update(status='failed', error=str(error))
+                failure = log_failure(folder, path, entry, error)
+                message(f"Skipped ({failure['category']}): {path.name}: {error}; log: {folder / 'skipped.jsonl'}")
                 message(f'Skipping unreadable/invalid file: {path.name}. Use --retry-failed after fixing it.')
             except (KeyboardInterrupt, BatchPause):
                 entry['status'] = 'paused'
@@ -183,6 +218,7 @@ def run(args, event_handler=None):
         raise
     finally:
         queue['last_run']['elapsed_seconds'] = round(time.monotonic() - started, 2)
+        queue['last_run']['updated_at'] = time.time()
         scanner.save(queue_path, queue)
         done = sum(queue['files'][str(p)]['status'] == 'complete' for p in files)
         failed = sum(queue['files'][str(p)]['status'] == 'failed' for p in files)

@@ -24,3 +24,4 @@ audio/
 *.sqlite3-*
 # OS metadata
 .DS_Store
+docs/RASPBERRY_PI.md
