@@ -58,7 +58,8 @@ def write_csv(path, fields, rows):
     temp.replace(path)
 
 
-def export(state, folder, threshold):
+def playlist_rows(state, threshold=80):
+    """Build playlist/observation rows without writing exports."""
     observations, playlist = [], {}
     detection_times = {}
     for offset, matches in sorted(state['results'].items(), key=lambda item: float(item[0])):
@@ -100,6 +101,11 @@ def export(state, folder, threshold):
         json_rows.append(dict(item, status=status, versions_detected=list(variants),
                               first_detected_seconds=times[0], last_detected_seconds=times[-1],
                               detection_seconds=times))
+    return rows, json_rows, observations
+
+
+def export(state, folder, threshold):
+    rows, json_rows, observations = playlist_rows(state, threshold)
     write_csv(folder / 'observations.csv', ['timestamp', 'seconds', 'title', 'artist', 'score', 'status'], observations)
     write_csv(folder / 'playlist.csv', ['title', 'artist', 'first_detected', 'last_detected',
               'detections', 'confident_detections', 'best_score', 'isrc', 'versions_detected', 'status'], rows)

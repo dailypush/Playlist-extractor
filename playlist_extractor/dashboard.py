@@ -10,6 +10,7 @@ import sys
 import time
 
 from .catalog import timestamp
+from . import browser
 
 
 def clean(value):
@@ -166,7 +167,7 @@ def show(screen, output, source=None):
                 screen.addnstr(max(0, height - 2), 0, clean(auto), max(0, width - 1), curses.A_BOLD)
             except curses.error:
                 pass
-        footer = 'q quit (scan continues) | f skipped/queue | arrows scroll | Tab batch'
+        footer = 'p playlists | d database | f skipped | arrows scroll | Tab batch | q quit'
         try:
             screen.addnstr(max(0, height - 1), 0, footer, max(0, width - 1), curses.A_REVERSE)
         except curses.error:
@@ -175,7 +176,9 @@ def show(screen, output, source=None):
         key = screen.getch()
         if key in (ord('q'), ord('Q'), 27):
             return 0
-        if key in (ord('f'), ord('F')):
+        if key in (ord('p'), ord('d')):
+            browser.show(screen, output, database=key == ord('d'))
+        elif key in (ord('f'), ord('F')):
             failures, scroll = not failures, 0
         elif key in (curses.KEY_DOWN, ord('j')):
             scroll = min(max(0, count - 1), scroll + 1)

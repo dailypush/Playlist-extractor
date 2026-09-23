@@ -72,6 +72,16 @@ arrows to scroll, Tab for other batch queues, and `q` to quit the monitor only.
 Use `--once` for a plain snapshot or `--once --failed` for skipped-file details.
 Optionally filter queues with `--source /path/to/recordings`.
 
+In the monitor, press `p` to browse saved recordings and playlists, including
+the current recording's live checkpoint. Enter opens a recording, then opens
+song details with timestamps, artist/title, detection counts, review status,
+ISRC and versions. `/` searches recordings or songs; `c` clears the search.
+Press `d` for the read-only SQLite recognition cache: sample counts, matched
+and unmatched results, and paged listings. `/` searches cached result text;
+`n`/`p` changes database pages. Enter opens full details; `b`/`q` returns.
+These views do not pause scanning, rebuild exports, or make recognition calls.
+The cache is shared across recordings and its counts are samples, not songs.
+
 Each batch keeps an append-only `skipped.jsonl` next to its queue with media
 failure details, including FFmpeg/ffprobe stderr, timeout/exit code, source path,
 timestamp and last sample progress. Previously saved failures are migrated with
