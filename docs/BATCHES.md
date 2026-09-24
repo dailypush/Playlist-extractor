@@ -4,7 +4,8 @@ For unattended native operation, use
 `python -m playlist_extractor.unattended SOURCE --output RESULTS`.
 It runs sequential 500-request batches with 15-minute breaks until completion.
 Service/network failures retry after 1, 2, 4, then at most 6 hours; successful
-batches reset the backoff. Failed media remain skipped and logged. Completion,
+batches reset the backoff. Invalid media remain skipped and logged. Storage
+failures and media timeouts pause the current recording and use the same backoff. Completion,
 including completion with failed files, stops the runner. SIGTERM/Ctrl+C stops
 it and its current batch gracefully. The dashboard shows scheduled resumes.
 The Raspberry Pi systemd service uses this mode; ordinary CLI and Docker batch
@@ -34,8 +35,9 @@ or increase in concurrency. There is no guaranteed safe quota for unofficial
 Shazam access. Requests already in flight may finish after a time limit; time
 limits are cooperative, not hard process deadlines.
 Media probing times out after 60 seconds and each audio extraction after 120
-seconds. A timed-out file is marked failed so later recordings can continue;
-use `--retry-failed` after checking the file or storage device.
+seconds. Timeouts pause the queue and retain saved samples; unattended mode
+automatically retries after its error backoff. Repeated timeouts keep the queue
+paused for investigation rather than declaring the recording corrupt.
 
 The terminal menu's **8 — Run / resume batch** uses the configured source/output
 paths, sample interval, pacing and refinement preference, and asks for the global
@@ -86,7 +88,11 @@ Each batch keeps an append-only `skipped.jsonl` next to its queue with media
 failure details, including FFmpeg/ffprobe stderr, timeout/exit code, source path,
 timestamp and last sample progress. Previously saved failures are migrated with
 the details available from their queue. Service/network failures pause the
-batch and are not logged as skipped media. Dry runs remain read-only.
+batch and are not logged as skipped media. Storage errors reported by FFmpeg or
+ffprobe (such as `Host is down`, I/O errors, or inaccessible files), and media
+timeouts, go into a separate `retryable.jsonl` log with the same diagnostic fields.
+The current recording stays paused and later recordings remain untouched.
+Dry runs remain read-only.
 
 `scan_results/batches/<batch-id>/queue.json` stores recording paths, file metadata,
 status, recent sample progress, output folders, and the last run's request/cache
@@ -97,8 +103,13 @@ can change between invocations without creating another queue.
 - Run the same command again to resume paused files and skip completed files.
 - New files are discovered on each invocation. Changed file size/modification
   time resets that file's queue entry and selects its new scanner checkpoint.
-- Unreadable/invalid files are marked failed and skipped. After fixing them,
+- Invalid media are marked failed and skipped. After fixing them,
   use `--retry-failed` to retry unchanged failed entries.
+- Old failed entries whose saved diagnostics identify storage errors or timeouts
+  are automatically requeued on the next run. Original failure logs, completed
+  recordings, cached recognitions and checkpoints are retained.
+- Directory enumeration errors abort inventory rather than treating an incomplete
+  NAS listing as the complete queue.
 - Service, network or storage errors pause the batch immediately. Inspect the
   error and rerun later; it does not hammer the next file or retry automatically.
 - Ctrl+C and SIGTERM pause gracefully. A hard kill/power loss can leave an entry

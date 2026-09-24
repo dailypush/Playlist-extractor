@@ -111,7 +111,7 @@ class BatchTests(unittest.TestCase):
                 self.assertTrue(scanner.load_state(folder)['sampling']['complete'])
                 self.assertFalse(checkpoint.exists())
 
-    def test_extraction_timeout_keeps_saved_samples_and_continues(self):
+    def test_extraction_timeout_pauses_and_resumes_saved_samples(self):
         original_sample = scanner.sample
         def samples(path, offset, length, **kwargs):
             if path.name == 'a.mp4' and offset == 45:
@@ -123,16 +123,78 @@ class BatchTests(unittest.TestCase):
         with patch.object(scanner, 'sample', side_effect=samples), patch.object(scanner, 'recognize', return_value=[track()]):
             self.assertEqual(batch.main(self.args), 1)
         entries = list(self.queue()['files'].values())
-        self.assertEqual([entry['status'] for entry in entries], ['failed', 'complete'])
+        self.assertEqual([entry['status'] for entry in entries], ['paused', 'pending'])
         state = json.loads((Path(entries[0]['output']) / 'checkpoint.json').read_text())
         self.assertEqual(list(state['results']), ['0.0'])
         self.assertFalse(state['sampling']['complete'])
-        failure = entries[0]['failure']
+        failure = entries[0]['retryable_failure']
         self.assertEqual(failure['category'], 'ffmpeg')
         self.assertEqual(failure['timeout_seconds'], scanner.SAMPLE_TIMEOUT)
         self.assertEqual(failure['progress']['offset'], 45)
-        log = next((self.root / 'out/batches').glob('*/skipped.jsonl'))
+        log = next((self.root / 'out/batches').glob('*/retryable.jsonl'))
         self.assertEqual(json.loads(log.read_text())['source'], str((self.media / 'a.mp4').resolve()))
+        self.assertFalse(log.with_name('skipped.jsonl').exists())
+        with patch.object(scanner, 'recognize', return_value=[track()]) as api:
+            self.assertEqual(batch.main(self.args), 0)
+            self.assertEqual(api.call_count, 3)  # The saved first sample is reused.
+
+    def test_nas_errors_pause_without_touching_next_file_and_then_recover(self):
+        error = subprocess.CalledProcessError(1, ['ffprobe', 'a.mp4'], stderr=b'a.mp4: Host is down\n')
+        with patch.object(scanner, 'duration', side_effect=error) as probe, patch.object(scanner, 'recognize') as api:
+            self.assertEqual(batch.main(self.args), 1)
+            self.assertEqual(probe.call_count, 1)
+            api.assert_not_called()
+        self.assertEqual([e['status'] for e in self.queue()['files'].values()], ['paused', 'pending'])
+        self.assertEqual(self.queue()['last_run']['status'], 'paused')
+        with patch.object(scanner, 'recognize', return_value=[track()]):
+            self.assertEqual(batch.main(self.args), 0)
+        self.assertEqual(self.queue()['last_run']['status'], 'complete')
+
+    def test_old_storage_failures_requeued_but_invalid_media_stays_failed(self):
+        with patch.object(scanner, 'duration', side_effect=subprocess.CalledProcessError(1, ['ffprobe'], stderr=b'moov atom not found')):
+            self.assertEqual(batch.main(self.args), 1)
+        path = next((self.root / 'out/batches').glob('*/queue.json'))
+        log = path.with_name('skipped.jsonl').read_bytes()
+        for diagnostic in ({'stderr': 'Host is down'}, {'timeout_seconds': 60}):
+            q = self.queue()
+            entry = q['files'][str((self.media / 'a.mp4').resolve())]
+            entry.update(status='failed', failure=dict(entry['failure'], stderr='', timeout_seconds=None))
+            entry['failure'].update(diagnostic)
+            scanner.save(path, q)
+            with patch.object(scanner, 'recognize', return_value=[track()]):
+                self.assertEqual(batch.main(self.args), 1)
+            self.assertEqual([e['status'] for e in self.queue()['files'].values()], ['complete', 'failed'])
+            self.assertEqual(path.with_name('skipped.jsonl').read_bytes(), log)
+
+    def test_inaccessible_directory_aborts_inventory_without_overwriting_queue(self):
+        with patch.object(scanner, 'recognize', return_value=[track()]):
+            self.assertEqual(batch.main(self.args), 0)
+        path = next((self.root / 'out/batches').glob('*/queue.json'))
+        original = path.read_bytes()
+        def walk(source, onerror):
+            yield str(source), ['offline'], ['a.mp4']
+            onerror(OSError('Host is down'))
+        with patch.object(batch.os, 'walk', side_effect=walk), patch.object(scanner, 'recognize') as api:
+            self.assertEqual(batch.main(self.args), 1)
+            api.assert_not_called()
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_storage_error_classification(self):
+        for stderr in ('Host is down', 'Input/output error', 'Stale file handle',
+                       'Connection timed out', 'Permission denied', 'No such file or directory'):
+            self.assertTrue(batch.retryable_media_failure({'stderr': stderr}))
+        for stderr in ('moov atom not found', 'Invalid data found when processing input', ''):
+            self.assertFalse(batch.retryable_media_failure({'stderr': stderr}))
+
+    def test_probe_timeout_pauses_without_skipping(self):
+        error = ValueError('media probe timed out after 60s')
+        error.__cause__ = subprocess.TimeoutExpired(['ffprobe'], 60)
+        with patch.object(scanner, 'duration', side_effect=error), patch.object(scanner, 'recognize') as api:
+            self.assertEqual(batch.main(self.args), 1)
+            api.assert_not_called()
+        entries = list(self.queue()['files'].values())
+        self.assertEqual([e['status'] for e in entries], ['paused', 'pending'])
+        self.assertEqual(entries[0]['retryable_failure']['timeout_seconds'], 60)
 
     def test_failure_log_preserves_stderr_and_history_without_relogging_skips(self):
         error = subprocess.CalledProcessError(1, ['ffprobe', 'a.mp4'], stderr=b'moov atom not found\n')

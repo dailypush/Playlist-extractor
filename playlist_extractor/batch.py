@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import signal
 import sqlite3
+import stat
 import subprocess
 import time
 import wave
@@ -21,8 +22,7 @@ class BatchPause(Exception):
     pass
 
 
-def log_failure(folder, path, entry, error=None):
-    """Keep an append-only audit trail, including decoder stderr and timeouts."""
+def failure_record(path, entry, error=None):
     cause = error
     while cause is not None and cause.__cause__ is not None:
         cause = cause.__cause__
@@ -31,18 +31,39 @@ def log_failure(folder, path, entry, error=None):
     stderr = getattr(cause, 'stderr', '') or ''
     if isinstance(stderr, bytes):
         stderr = stderr.decode('utf-8', errors='replace')
-    record = dict(time=datetime.now(timezone.utc).isoformat(), source=str(path),
+    return dict(time=datetime.now(timezone.utc).isoformat(), source=str(path),
                   category=program if program in ('ffmpeg', 'ffprobe') else 'media_validation',
                   error=str(error) if error is not None else entry.get('error', 'Previously failed'),
                   stderr=stderr[-8192:], command=command,
                   timeout_seconds=getattr(cause, 'timeout', None),
                   returncode=getattr(cause, 'returncode', None),
                   progress=entry.get('progress'), historical=error is None)
-    with (folder / 'skipped.jsonl').open('a', encoding='utf-8') as handle:
+
+
+def retryable_media_failure(record):
+    """A decoder's exit status alone cannot distinguish bad media from lost storage."""
+    if record.get('timeout_seconds') is not None:
+        return True
+    stderr = record.get('stderr', '').casefold()
+    return any(text in stderr for text in (
+        'host is down', 'no route to host', 'network is unreachable',
+        'network is down', 'connection timed out', 'connection reset',
+        'connection refused', 'connection aborted', 'transport endpoint',
+        'input/output error', 'i/o error', 'stale file handle',
+        'resource temporarily unavailable', 'no such file or directory',
+        'permission denied', 'operation timed out',
+    ))
+
+
+def log_failure(folder, path, entry, error=None, *, retryable=False):
+    """Keep permanent skips and retryable failures in separate append-only logs."""
+    record = failure_record(path, entry, error)
+    filename = 'retryable.jsonl' if retryable else 'skipped.jsonl'
+    with (folder / filename).open('a', encoding='utf-8') as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + '\n')
         handle.flush()
         os.fsync(handle.fileno())
-    entry['failure'] = record
+    entry['retryable_failure' if retryable else 'failure'] = record
     return record
 
 
@@ -79,8 +100,18 @@ def completed_output(entry, source, args):
 
 
 def discover(source):
-    files = source.rglob('*') if source.is_dir() else [source]
-    return sorted({p.resolve() for p in files if p.is_file() and p.suffix.lower() in scanner.MEDIA})
+    # Path.rglob/is_file may suppress filesystem errors, presenting an outage
+    # as an empty or truncated queue. Abort inventory instead.
+    def failed(error):
+        raise error
+
+    if stat.S_ISDIR(source.stat().st_mode):
+        files = (Path(root) / name for root, _, names in os.walk(source, onerror=failed)
+                 for name in names)
+    else:
+        files = [source]
+    return sorted({p.resolve() for p in files if p.suffix.lower() in scanner.MEDIA
+                   and stat.S_ISREG(p.stat().st_mode)})
 
 
 def run(args, event_handler=None):
@@ -126,6 +157,11 @@ def run(args, event_handler=None):
             log_failure(folder, path, entry)
         if entry is None or entry['signature'] != signature:
             queue['files'][str(path)] = dict(signature=signature, status='pending')
+        elif entry['status'] == 'failed' and retryable_media_failure(entry.get('failure', {})):
+            # Repair queues created before storage errors were distinguished from
+            # invalid media. Retain the original failure and skipped audit log.
+            entry['status'] = 'pending'
+            message(f'Requeued previous storage failure/timeout: {path.name}')
         elif entry['status'] in ('running', 'paused') or (args.retry_failed and entry['status'] == 'failed'):
             entry['status'] = 'pending'
         elif entry['status'] == 'complete' and not completed_output(entry, path, args):
@@ -187,6 +223,12 @@ def run(args, event_handler=None):
             try:
                 scanner.scan(path, scan_args, dict(provider='shazam', host='shazam'), event_handler=handle)
             except (subprocess.CalledProcessError, ValueError, wave.Error) as error:
+                if retryable_media_failure(failure_record(path, entry, error)):
+                    entry.update(status='paused', error=str(error))
+                    log_failure(folder, path, entry, error, retryable=True)
+                    message(f'Storage failure or media timeout; pausing queue at {path.name}. '
+                            f'Saved progress retained; log: {folder / "retryable.jsonl"}')
+                    raise RuntimeError('Media temporarily unavailable; retry this recording later') from error
                 entry.update(status='failed', error=str(error))
                 failure = log_failure(folder, path, entry, error)
                 message(f"Skipped ({failure['category']}): {path.name}: {error}; log: {folder / 'skipped.jsonl'}")
