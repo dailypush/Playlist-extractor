@@ -1,0 +1,19 @@
+[Unit]
+Description=Playlist extractor system health snapshot
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/playlist-extractor
+ExecStart=/opt/playlist-extractor/.venv/bin/python -m playlist_extractor.health --nas-host 192.168.0.109 --mount /mnt/playlist-videos
+RuntimeDirectory=playlist-extractor-health
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=10
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/playlist-extractor-health
+

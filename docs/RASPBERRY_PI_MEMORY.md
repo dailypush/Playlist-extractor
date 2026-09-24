@@ -63,3 +63,10 @@ A five-minute observation during normal sequential scanning completed with:
 
 The settings were persisted after this observation. This is an initial workload
 check, not a long-duration stability test or a controlled before/after benchmark.
+
+## Live monitoring
+
+Run `playlist-watch` and press **h** to inspect memory headroom, NAS reachability,
+and recent kernel warnings. The snapshot refreshes every 30 seconds and is marked
+stale after 90 seconds. See [the terminal guide](TERMINAL.md#background-scanner-and-system-health)
+for sampler setup and the limits of the health checks.

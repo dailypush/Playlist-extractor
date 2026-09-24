@@ -10,7 +10,7 @@ import sys
 import time
 
 from .catalog import timestamp
-from . import browser
+from . import browser, health
 
 
 def clean(value):
@@ -132,7 +132,7 @@ def render(queue, path, alive=False, failures=False, scroll=0, now=None):
     return [clean(line) for line in lines], len(rows)
 
 
-def show(screen, output, source=None):
+def show(screen, output, source=None, health_path=health.DEFAULT_PATH, health_view=False):
     try:
         curses.curs_set(0)
     except curses.error:
@@ -141,6 +141,7 @@ def show(screen, output, source=None):
     selected = None
     failures = False
     scroll = 0
+    health_scroll = 0
     while True:
         paths = matching_paths(output, source)
         if selected not in paths:
@@ -154,11 +155,18 @@ def show(screen, output, source=None):
                 lines = ['PLAYLIST EXTRACTOR', '', 'No batch queue yet. Waiting for the scanner...', str(output)]
         except (OSError, ValueError, TypeError, KeyError) as error:
             lines = ['Waiting for readable queue data...', clean(error)]
+        snapshot = health.read(health_path)
+        if health_view:
+            lines = health.details(snapshot)
+            count = len(lines)
+            lines = lines[health_scroll:]
+        else:
+            lines.insert(min(5, len(lines)), health.summary(snapshot))
         screen.erase()
         height, width = screen.getmaxyx()
         for y, line in enumerate(lines[:max(0, height - 2)]):
             try:
-                screen.addnstr(y, 0, line, max(0, width - 1), curses.A_BOLD if y in (0, 7) else curses.A_NORMAL)
+                screen.addnstr(y, 0, clean(line), max(0, width - 1), curses.A_BOLD if y == 0 else curses.A_NORMAL)
             except curses.error:
                 pass
         auto = automation_line(output)
@@ -167,7 +175,8 @@ def show(screen, output, source=None):
                 screen.addnstr(max(0, height - 2), 0, clean(auto), max(0, width - 1), curses.A_BOLD)
             except curses.error:
                 pass
-        footer = 'p playlists | d database | f skipped | arrows scroll | Tab batch | q quit'
+        footer = ('h/b back | arrows scroll | q quit' if health_view else
+                  'h health | p playlists | d database | f skipped | arrows | Tab batch | q quit')
         try:
             screen.addnstr(max(0, height - 1), 0, footer, max(0, width - 1), curses.A_REVERSE)
         except curses.error:
@@ -176,7 +185,15 @@ def show(screen, output, source=None):
         key = screen.getch()
         if key in (ord('q'), ord('Q'), 27):
             return 0
-        if key in (ord('p'), ord('d')):
+        if key in (ord('h'), ord('H')) or (health_view and key == ord('b')):
+            health_view, health_scroll = not health_view, 0
+        elif health_view:
+            step = max(1, height - 4) if key in (curses.KEY_NPAGE, curses.KEY_PPAGE) else 1
+            if key in (curses.KEY_DOWN, ord('j'), curses.KEY_NPAGE):
+                health_scroll = min(max(0, count - 1), health_scroll + step)
+            elif key in (curses.KEY_UP, ord('k'), curses.KEY_PPAGE):
+                health_scroll = max(0, health_scroll - step)
+        elif key in (ord('p'), ord('d')):
             browser.show(screen, output, database=key == ord('d'))
         elif key in (ord('f'), ord('F')):
             failures, scroll = not failures, 0
@@ -198,11 +215,16 @@ def main(argv=None):
     parser.add_argument('--source', type=Path, help='Only show queues for this source')
     parser.add_argument('--once', action='store_true', help='Print a snapshot without a terminal')
     parser.add_argument('--failed', action='store_true', help='Show skipped files in the snapshot')
+    parser.add_argument('--health', action='store_true', help='Open system health or print it with --once')
+    parser.add_argument('--health-file', type=Path, default=health.DEFAULT_PATH, help='Health sampler snapshot')
     args = parser.parse_args(argv)
     output = args.output.expanduser().resolve()
     source = args.source.expanduser().resolve() if args.source else None
     try:
         if args.once:
+            if args.health:
+                print('\n'.join(clean(line) for line in health.details(health.read(args.health_file))))
+                return 0
             paths = matching_paths(output, source)
             if not paths:
                 print('No batch queue yet.')
@@ -210,6 +232,7 @@ def main(argv=None):
             path = max(paths, key=lambda p: p.stat().st_mtime)
             queue = load_queue(path)
             lines, _ = render(queue, path, worker_alive(output, queue.get('last_run', {})), args.failed)
+            lines.insert(5, health.summary(health.read(args.health_file)))
             print('\n'.join(lines))
             auto = automation_line(output)
             if auto:
@@ -217,7 +240,7 @@ def main(argv=None):
             return 0
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             parser.error('Dashboard needs a terminal; use --once for a snapshot.')
-        return curses.wrapper(show, output, source)
+        return curses.wrapper(show, output, source, args.health_file, args.health)
     except KeyboardInterrupt:
         return 0
     except (OSError, ValueError, curses.error) as error:

@@ -9,6 +9,34 @@ Run from the project root after following the README installation steps:
 Or use `.venv/bin/playlist-ui` after `pip install -e .`. No extra UI dependency
 is needed. A terminal with at least 80 columns is recommended.
 
+## Background scanner and system health
+
+On DietPi, run `playlist-watch` (or select **9 — Watch background batch**).
+The main dashboard includes a health line. Press **h** for memory, free-memory
+reserve, swap usage, Wi-Fi signal, NAS SMB-port reachability, and kernel warnings
+from the last 15 minutes. Press **h** or **b** to return; **q** closes the monitor
+without stopping scanning. Arrows and Page Up/Down scroll the health view.
+
+For a plain snapshot: `playlist-watch --once --health`.
+
+The optional `playlist-extractor-health.timer` refreshes
+`/run/playlist-extractor-health/status.json` every 30 seconds. The dashboard only
+reads this file; it does not probe the NAS or need elevated journal permissions.
+Snapshots older than 90 seconds are labeled **STALE**. Missing or inaccessible
+kernel logs are labeled unavailable, not zero warnings. Counts are matching log
+messages (up to the latest 200 kernel warnings), not distinct outages.
+SMB-port reachability and a present mount do not guarantee successful file reads;
+the batch's progress and automatic-retry countdown remain visible separately.
+
+To install the sampler on the documented DietPi deployment, copy
+`deploy/raspberry-pi/playlist-extractor-health.service` and `.timer` to
+`/etc/systemd/system/`, run `systemctl daemon-reload`, then
+`systemctl enable --now playlist-extractor-health.timer`. The service uses the
+documented NAS IP; update `--nas-host` and `--mount` for a different deployment.
+It runs with journal access, a read-only system filesystem and a writable runtime
+directory. No scanner restart is necessary. Elsewhere, use `--health-file PATH`
+to read an existing snapshot, or leave the optional sampler uninstalled.
+
 ## Workflow
 
 1. Choose Settings if recordings or results are in another folder. Shazam is
