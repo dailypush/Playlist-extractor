@@ -1,5 +1,6 @@
 from contextlib import ExitStack
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -19,6 +20,7 @@ class BatchTests(unittest.TestCase):
         self.media.mkdir()
         for name in ('a.mp4', 'b.mp4'):
             (self.media / name).touch()
+            os.utime(self.media / name, ns=(1_000_000_000, 1_000_000_000))
         self.args = [str(self.media), '--output', str(self.root / 'out'), '--delay', '0', '--no-refine']
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
@@ -29,6 +31,28 @@ class BatchTests(unittest.TestCase):
 
     def queue(self):
         return json.loads(next((self.root / 'out/batches').glob('*/queue.json')).read_text())
+
+    def test_newest_first_order_and_resume_with_new_recording(self):
+        newest = (self.media / 'b.mp4').resolve()
+        oldest = (self.media / 'a.mp4').resolve()
+        os.utime(newest, ns=(2_000_000_000, 2_000_000_000))
+        with patch.object(scanner, 'recognize', return_value=[track()]):
+            self.assertEqual(batch.main(self.args + ['--max-requests', '2']), 0)
+        queue = self.queue()
+        self.assertEqual(queue['active_files'], [str(newest), str(oldest)])
+        self.assertEqual(queue['files'][str(newest)]['status'], 'complete')
+        self.assertEqual(queue['files'][str(oldest)]['status'], 'pending')
+
+        added = self.media / 'nested' / 'c.mp4'
+        added.parent.mkdir()
+        added.touch()
+        added = added.resolve()
+        os.utime(added, ns=(3_000_000_000, 3_000_000_000))
+        with patch.object(scanner, 'scan') as scan:
+            self.assertEqual(batch.main(self.args), 0)
+        self.assertEqual([call.args[0] for call in scan.call_args_list], [added, oldest])
+        self.assertEqual(self.queue()['active_files'], [str(added), str(newest), str(oldest)])
+        self.assertEqual(self.queue()['files'][str(newest)], queue['files'][str(newest)])
 
     def test_global_budget_and_resume_skip_completed_files(self):
         with patch.object(scanner, 'recognize', return_value=[track()]) as api:

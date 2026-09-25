@@ -14,6 +14,9 @@ commands retain their single-run behavior.
 Use a persistent batch for a large folder instead of launching parallel scans.
 It runs one recording and one Shazam request at a time, retaining the shared
 cache and each recording's original checkpoint/JSON/CSV outputs.
+Recordings run newest to oldest by file modification time, with path order used
+for ties. Each invocation refreshes this order, including resumed batches and
+dry runs; completed recordings are still skipped and partial progress is reused.
 
 ```sh
 # Inventory total hours and maximum sampling work; no requests or queue writes.

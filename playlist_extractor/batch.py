@@ -111,7 +111,8 @@ def discover(source):
     else:
         files = [source]
     return sorted({p.resolve() for p in files if p.suffix.lower() in scanner.MEDIA
-                   and stat.S_ISREG(p.stat().st_mode)})
+                   and stat.S_ISREG(p.stat().st_mode)},
+                  key=lambda p: (-p.stat().st_mtime_ns, str(p)))
 
 
 def run(args, event_handler=None):
