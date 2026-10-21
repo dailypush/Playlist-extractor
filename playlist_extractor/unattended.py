@@ -63,9 +63,12 @@ def run(source, output, stop):
         state['updated_at'] = time.time()
         save(status_path, state)
         log('heartbeat', state=state,
-            **diagnostics.snapshot(queue_path(source, output), child.pid if child else None))
+            **diagnostics.snapshot(queue_file, child.pid if child else None))
 
     log('service_started', source=str(source))
+    # Resolve queue identity once, never from the heartbeat: resolving the
+    # source repeatedly can itself block on an unavailable SMB mount.
+    queue_file = queue_path(source, output)
     try:
         previous = json.loads(status_path.read_text())
         if previous.get('source') == str(source):
@@ -104,9 +107,9 @@ def run(source, output, stop):
             child = None
             if stop.is_set():
                 break
-            result = outcome(queue_path(source, output), started, code)
+            result = outcome(queue_file, started, code)
             state['last_exit_code'] = code
-            context = diagnostics.snapshot(queue_path(source, output))
+            context = diagnostics.snapshot(queue_file)
             # Ignore queue errors from an earlier invocation (inventory can
             # fail before a new queue record is created).
             last_run = context['last_run']

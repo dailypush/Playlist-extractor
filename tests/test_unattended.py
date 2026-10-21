@@ -31,9 +31,10 @@ class UnattendedTests(unittest.TestCase):
         stop.is_set.return_value = False
         child = Mock(returncode=0)
         child.poll.return_value = 0
-        with patch.object(unattended.subprocess, 'Popen', return_value=child) as launch, patch.object(unattended, 'outcome', side_effect=['break', 'finished']), patch.object(unattended, 'wait_until') as wait:
+        with patch.object(unattended.subprocess, 'Popen', return_value=child) as launch, patch.object(unattended, 'outcome', side_effect=['break', 'finished']), patch.object(unattended, 'wait_until') as wait, patch.object(unattended, 'queue_path', wraps=unattended.queue_path) as queue_path:
             self.assertEqual(unattended.run(self.source, self.output, stop), 0)
         self.assertEqual(wait.call_count, 1)
+        queue_path.assert_called_once()
         self.assertEqual(launch.call_count, 2)
         self.assertNotIn('--retry-failed', launch.call_args[0][0])
         self.assertEqual(json.loads((self.output / 'unattended.json').read_text())['status'], 'finished')

@@ -40,3 +40,17 @@ class DiagnosticsTests(unittest.TestCase):
     def test_unwritable_history_does_not_stop_scanning(self):
         with patch.object(diagnostics.Path, 'mkdir', side_effect=OSError('disk full')):
             diagnostics.record(self.root, 'test')
+
+    def test_process_snapshot_records_decoder_io_and_cpu(self):
+        for pid, name, children in ((42, 'python', '43'), (43, 'ffmpeg', '')):
+            folder = self.root / str(pid)
+            (folder / 'task' / str(pid)).mkdir(parents=True)
+            (folder / 'status').write_text(f'Name:\t{name}\nState:\tD (disk sleep)\nVmRSS:\t100 kB\n')
+            (folder / 'wchan').write_text('folio_wait_bit_common')
+            (folder / 'io').write_text('rchar: 25000000\nread_bytes: 13000000\n')
+            (folder / 'stat').write_text(f'{pid} ({name} with spaces) ' + ' '.join(['D'] + ['0'] * 10 + ['273', '42']))
+            (folder / 'task' / str(pid) / 'children').write_text(children)
+        rows = diagnostics.process_info(42, proc=self.root)
+        self.assertEqual([row['name'] for row in rows], ['python', 'ffmpeg'])
+        self.assertEqual(rows[1]['cpu_ticks'], {'user': 273, 'system': 42})
+        self.assertEqual(rows[1]['io']['rchar'], 25000000)

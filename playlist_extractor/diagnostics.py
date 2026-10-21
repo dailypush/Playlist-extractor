@@ -26,8 +26,18 @@ def process_info(pid, proc=Path('/proc')):
         folder = proc / current
         try:
             status = dict(line.split(':', 1) for line in (folder / 'status').read_text().splitlines() if ':' in line)
-            rows.append(dict(pid=int(current), name=status['Name'].strip(),
-                             state=status['State'].strip(), wchan=(folder / 'wchan').read_text().strip()))
+            row = dict(pid=int(current), name=status['Name'].strip(),
+                       state=status['State'].strip(), wchan=(folder / 'wchan').read_text().strip(),
+                       memory_rss=status.get('VmRSS', '').strip())
+            rows.append(row)
+            try:
+                row['io'] = {key: int(value) for key, value in
+                             (line.split(':', 1) for line in (folder / 'io').read_text().splitlines())}
+                # The process name in parentheses may contain spaces.
+                fields = (folder / 'stat').read_text().rsplit(')', 1)[1].split()
+                row['cpu_ticks'] = dict(user=int(fields[11]), system=int(fields[12]))
+            except (OSError, ValueError, IndexError):
+                pass
             pending.extend((folder / 'task' / current / 'children').read_text().split())
         except (OSError, KeyError, ValueError):
             continue
