@@ -47,6 +47,34 @@ def kernel_health():
 
 def collect(host, mount, interface='wlan0', proc=Path('/proc')):
     data = {'version': 1, 'updated_at': time.time(), 'errors': []}
+    # These kernel counters let persisted snapshots distinguish a reboot,
+    # memory stalls, and dropped Wi-Fi packets from an intentional retry wait.
+    for key, relative in (('boot_id', 'sys/kernel/random/boot_id'),
+                          ('uptime', 'uptime'), ('memory_pressure', 'pressure/memory'),
+                          ('io_pressure', 'pressure/io')):
+        try:
+            data[key] = (proc / relative).read_text().strip()
+        except OSError:
+            pass
+    try:
+        data['vmstat'] = {key: int(value) for key, value in
+                          (line.split() for line in (proc / 'vmstat').read_text().splitlines())
+                          if key.startswith(('allocstall', 'pgscan_direct', 'pswp', 'oom_kill'))}
+    except (OSError, ValueError):
+        pass
+    try:
+        row = next(line.split(':', 1)[1].split() for line in (proc / 'net/dev').read_text().splitlines()
+                   if line.split(':', 1)[0].strip() == interface)
+        data['network_counters'] = dict(zip(('rx_bytes', 'rx_errors', 'rx_drops', 'tx_bytes', 'tx_errors', 'tx_drops'),
+                                            (int(row[i]) for i in (0, 2, 3, 8, 10, 11))))
+    except (OSError, ValueError, IndexError, StopIteration):
+        pass
+    try:
+        result = subprocess.run(['vcgencmd', 'get_throttled'], capture_output=True, text=True, timeout=1)
+        if result.returncode == 0:
+            data['power_throttled'] = result.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     try:
         data['memory'] = {key: int(value.split()[0]) for key, value in
                           (line.split(':', 1) for line in (proc / 'meminfo').read_text().splitlines())

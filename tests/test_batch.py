@@ -265,6 +265,10 @@ class BatchTests(unittest.TestCase):
             self.assertEqual(batch.main(self.args), 1)
             self.assertEqual(api.call_count, 1)
         self.assertEqual([e['status'] for e in self.queue()['files'].values()], ['paused', 'pending'])
+        self.assertIn('service unavailable', self.queue()['last_run']['error'])
+        failure = next(json.loads(line) for line in (self.root / 'out/diagnostics/batch.jsonl').read_text().splitlines()
+                       if json.loads(line)['event'] == 'batch_failed')
+        self.assertIn('RuntimeError: service unavailable', failure['traceback'])
 
     def test_time_limit_pauses_before_request(self):
         # Let one sample complete, then make the next extraction observe the deadline.

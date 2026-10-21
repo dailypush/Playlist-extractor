@@ -65,7 +65,10 @@ def automation_line(output):
         if state['status'] == 'waiting':
             os.kill(state['pid'], 0)
             minutes = max(0, int((state['next_run_at'] - time.time() + 59) // 60))
-            return f"AUTO RESUME in {minutes} min | {state.get('reason', 'Scheduled break')}"
+            text = f"AUTO RESUME in {minutes} min | {state.get('reason', 'Scheduled break')}"
+            if state.get('last_error'):
+                text += ' | ' + clean(state['last_error'])
+            return text
         if state['status'] == 'running':
             os.kill(state['pid'], 0)
             return 'UNATTENDED: automatic resume enabled | 15-minute breaks between batches'
@@ -98,6 +101,8 @@ def render(queue, path, alive=False, failures=False, scroll=0, now=None):
              f"Requests {run.get('requests', 0)}/{budget} | Cache hits {run.get('cache_hits', 0)} | Elapsed {timestamp(elapsed)}"]
     if run.get('updated_at'):
         lines.append(f"Last activity {int(max(0, now - run['updated_at']))}s ago (updates at processing steps)")
+    if run.get('error'):
+        lines.append('PAUSE ERROR: ' + clean(run['error']))
     current = next(((p, e) for p, e in items if e.get('status') == 'running'), None)
     if current is None and run.get('current') in entries:
         current = (run['current'], entries[run['current']])
@@ -105,6 +110,8 @@ def render(queue, path, alive=False, failures=False, scroll=0, now=None):
     if current:
         p, e = current
         lines.append(f"{Path(p).name} [{e.get('status')}]")
+        if e.get('error') and e.get('error') != run.get('error'):
+            lines.append('Recording error: ' + clean(e['error']))
         progress = e.get('progress') or {}
         if progress:
             lines.append(f"{progress.get('phase', '')}: {progress.get('done', 0)}/{progress.get('total', 0)} samples | {progress.get('songs', 0)} songs | {progress.get('activity', 'Saved progress')}")

@@ -11,9 +11,11 @@ import sqlite3
 import stat
 import subprocess
 import time
+import traceback
 import wave
 
 from . import scanner
+from . import diagnostics
 from .locking import output_lock as batch_lock
 from .storage import load_state, retire_checkpoint
 
@@ -122,7 +124,11 @@ def run(args, event_handler=None):
         else:
             print(text, flush=True)
 
+    if not args.dry_run:
+        diagnostics.record(args.output, 'inventory_started', source=str(args.source))
     files = discover(args.source)
+    if not args.dry_run:
+        diagnostics.record(args.output, 'inventory_finished', recordings=len(files))
     if not files:
         raise ValueError('No supported recordings found')
     if args.dry_run:
@@ -187,6 +193,7 @@ def run(args, event_handler=None):
             if total_calls:
                 time.sleep(args.delay)  # Preserve pacing across recording boundaries.
             message(f'File {index}/{len(files)}: {path.name}')
+            diagnostics.record(args.output, 'recording_started', source=str(path), index=index)
             entry.update(status='running', error=None, progress=None)
             queue['last_run'].update(current=str(path), current_index=index, updated_at=time.time())
             scanner.save(queue_path, queue)
@@ -256,8 +263,9 @@ def run(args, event_handler=None):
         queue['last_run']['status'] = 'paused'
         message('Batch paused; saved samples and completed files will be reused.')
         exit_code = 130
-    except Exception:
+    except Exception as error:
         queue['last_run']['status'] = 'paused'
+        queue['last_run']['error'] = f'{type(error).__name__}: {error}'
         raise
     finally:
         queue['last_run']['elapsed_seconds'] = round(time.monotonic() - started, 2)
@@ -298,12 +306,20 @@ def main(argv=None, event_handler=None):
         with batch_lock(args.output):
             return run(args, event_handler)
     except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
+        if not args.dry_run:
+            diagnostics.record(args.output, 'batch_failed', error=f'{type(error).__name__}: {error}',
+                               traceback=traceback.format_exc(), health=diagnostics.health.read())
         text = f'Batch stopped: {error}. Rerun to resume saved progress.'
         if event_handler:
             event_handler(dict(kind='message', text=text))
         else:
             print(text, flush=True)
         return 1
+    except Exception as error:
+        if not args.dry_run:
+            diagnostics.record(args.output, 'batch_crashed', error=f'{type(error).__name__}: {error}',
+                               traceback=traceback.format_exc(), health=diagnostics.health.read())
+        raise
     except KeyboardInterrupt:
         return 130
     finally:
