@@ -1,5 +1,8 @@
 # DietPi Wi-Fi and NAS read caching
 
+For bounded automatic reboots after a sustained outage, see
+[automatic recovery](RASPBERRY_PI_RECOVERY.md).
+
 ## Incident, 2026-10-27
 
 The Pi Zero 2 W became unreachable over SSH until power-cycled. After reboot,

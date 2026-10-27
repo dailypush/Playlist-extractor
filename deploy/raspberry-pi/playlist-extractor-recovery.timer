@@ -1,0 +1,11 @@
+[Unit]
+Description=Check playlist Wi-Fi recovery once a minute
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=playlist-extractor-recovery.service
+
+[Install]
+WantedBy=timers.target

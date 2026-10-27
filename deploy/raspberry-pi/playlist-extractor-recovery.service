@@ -1,0 +1,18 @@
+[Unit]
+Description=Recover sustained playlist Wi-Fi outages with bounded reboots
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/playlist-extractor
+ExecStart=/opt/playlist-extractor/.venv/bin/python -m playlist_extractor.recovery --gateway 192.168.0.1 --nas-host 192.168.0.109 --allow-reboot
+StateDirectory=playlist-extractor-recovery
+StateDirectoryMode=0700
+TimeoutStartSec=25
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/playlist-extractor-recovery
+
