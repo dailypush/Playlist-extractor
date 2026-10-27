@@ -24,7 +24,9 @@ from .catalog import song_key, write_csv, export, refinement_offsets, timestamp
 
 
 MEDIA = {'.mp4', '.mkv', '.mov', '.flv', '.ts', '.webm', '.mp3', '.m4a', '.wav', '.flac', '.ogg', '.aac'}
-PROBE_TIMEOUT = 60
+# A first, uncached read of a long NAS recording can exceed one minute even
+# when the network is healthy. Keep probing bounded, like sample extraction.
+PROBE_TIMEOUT = 120
 SAMPLE_TIMEOUT = 120
 
 
