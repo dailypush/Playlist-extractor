@@ -1,0 +1,4 @@
+# /etc/tmpfiles.d/playlist-journal.conf
+# Keep real journal data outside DietPi's RAM-backed /var/log.
+d /var/lib/playlist-system-journal 2755 root systemd-journal -
+L /var/log/journal - - - - /var/lib/playlist-system-journal

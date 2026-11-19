@@ -1,0 +1,17 @@
+[Unit]
+Description=Persist system journal outside DietPi RAMlog
+After=systemd-journald.service systemd-tmpfiles-setup.service dietpi-ramlog.service
+Wants=systemd-journald.service
+RequiresMountsFor=/var/lib/playlist-system-journal /var/log
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/playlist-journal.conf
+ExecStart=/usr/bin/test /var/log/journal -ef /var/lib/playlist-system-journal
+ExecStart=/usr/bin/journalctl --relinquish-var
+ExecStart=/usr/bin/journalctl --flush
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
