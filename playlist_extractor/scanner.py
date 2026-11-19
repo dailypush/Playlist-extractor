@@ -19,6 +19,7 @@ from .cache import RecognitionCache, audio_digest, namespace
 from .locking import output_lock
 from .prefetch import SamplePreparation
 from .storage import load_state, retire_checkpoint
+from .metrics import ScanMetrics
 
 from .catalog import song_key, write_csv, export, refinement_offsets, timestamp
 
@@ -133,14 +134,55 @@ def save(path, data):
     temp.replace(path)
 
 
+def retry_started_at(state, args, now):
+    batch_started = getattr(args, 'retry_started_at', None)
+    if batch_started is not None:
+        return batch_started
+    previous = state.get('unmatched_retry', {})
+    if previous.get('complete') is False and previous.get('min_age_days') == args.unmatched_min_age_days:
+        return previous['started_at']
+    return now
+
+
+def retry_offsets(state, args, now=None):
+    """Select old negative evidence without deleting it before a successful retry."""
+    if not getattr(args, 'retry_unmatched', False):
+        return []
+    started = retry_started_at(state, args, time.time() if now is None else now)
+    cutoff = started - args.unmatched_min_age_days * 86400
+    provenance = state.get('provenance', {})
+    def eligible(offset, matches):
+        checked = provenance.get(offset, {}).get('recognized_at')
+        # Legacy evidence has no trustworthy age. An explicit retry includes it.
+        return not matches and (checked is None or checked <= cutoff)
+    return sorted((float(offset) for offset, matches in state['results'].items()
+                   if eligible(offset, matches)))
+
+
+def add_retry_arguments(parser):
+    parser.add_argument('--retry-unmatched', action='store_true',
+                        help='Recheck saved no-matches; preserves positive matches and request limits')
+    parser.add_argument('--unmatched-min-age-days', type=float, default=7,
+                        help='Minimum no-match age for explicit retries (default: 7; 0 forces recheck)')
+
+
+def validate_retry_arguments(parser, args):
+    if not math.isfinite(args.unmatched_min_age_days) or args.unmatched_min_age_days < 0:
+        parser.error('Unmatched minimum age must be finite and nonnegative')
+    if args.retry_unmatched and (getattr(args, 'export_only', False) or getattr(args, 'seed_cache', False)):
+        parser.error('Unmatched retries cannot be combined with export-only or cache seeding')
+
+
 def scan(path, args, settings, event_handler=None):
+    metrics = ScanMetrics()
     def emit(kind, **data):
         if event_handler:
             event_handler(dict(kind=kind, source=str(path), **data))
         elif kind == 'message':
             print(data['text'], flush=True)
     if not args.export_only and not args.seed_cache:
-        seconds = duration(path)
+        with metrics.measure('probe'):
+            seconds = duration(path)
         offsets = [float(i) for i in range(0, math.ceil(seconds), args.interval)
                    if seconds - i >= args.sample_length]
         if not offsets:
@@ -179,46 +221,65 @@ def scan(path, args, settings, event_handler=None):
     state.setdefault('provenance', {})
     known_songs = {song_key(m) for matches in state['results'].values() for m in matches}
     resumed = len(state['results'])
+    retries = retry_offsets(state, args, metrics.started_at)
+    retry_start = retry_started_at(state, args, metrics.started_at) if getattr(args, 'retry_unmatched', False) else metrics.started_at
+    retry_cutoff = retry_start - getattr(args, 'unmatched_min_age_days', 7) * 86400
+
+    def persist():
+        with metrics.measure('checkpoint'):
+            save(checkpoint, state)
 
     def prepare(offset, cancel_event):
+        started = time.perf_counter()
         if cancel_event is None:
             audio = sample(path, offset, args.sample_length)
         else:
             audio = sample(path, offset, args.sample_length, cancel_event=cancel_event)
-        return audio, audio_digest(audio)
+        return audio, audio_digest(audio), time.perf_counter() - started
 
-    def run_offsets(positions, phase):
+    def run_offsets(positions, phase, retry=False):
         nonlocal calls, hits
-        done = sum(str(offset) in state['results'] for offset in positions)
+        done = 0 if retry else sum(str(offset) in state['results'] for offset in positions)
         def progress(**extra):
             emit('progress', phase=phase, done=done, total=len(positions),
                  requests=calls, cache_hits=hits, resumed=resumed,
                  songs=len(known_songs), **extra)
         progress(activity='Starting phase')
-        pending = [offset for offset in positions if str(offset) not in state['results']]
+        pending = [offset for offset in positions if retry or str(offset) not in state['results']]
         with SamplePreparation(pending, prepare, threaded=getattr(args, 'threaded', False)) as prepared:
             for offset in pending:
                 progress(activity='Extracting audio', offset=offset)
-                audio, digest = next(prepared)
-                matches = cache.get(provider_key, digest)
-                if matches is None:
+                with metrics.measure('preparation_wait'):
+                    audio, digest, extraction_seconds = next(prepared)
+                metrics.seconds['extraction'] += extraction_seconds
+                metrics.prepared_samples += 1
+                with metrics.measure('cache'):
+                    cached = cache.get_entry(provider_key, digest,
+                                             negative_after=retry_cutoff if retry else None)
+                if cached is None:
                     if args.max_requests is not None and calls >= args.max_requests:
                         emit('message', text='Request limit reached; rerun to resume.')
                         return False
                     if calls:
                         progress(activity='Pacing requests', offset=offset)
-                        time.sleep(args.delay)
+                        with metrics.measure('pacing'):
+                            time.sleep(args.delay)
                     calls += 1
                     progress(activity='Recognizing audio', offset=offset)
-                    matches = recognize(audio, settings)
-                    cache.put(provider_key, digest, matches)
+                    with metrics.measure('recognition'):
+                        matches = recognize(audio, settings)
+                    with metrics.measure('cache'):
+                        cache.put(provider_key, digest, matches)
+                    recognized_at = time.time()
                     origin = 'provider'
                 else:
+                    matches, recognized_at = cached
                     hits += 1
                     origin = 'exact_cache'
                 state['results'][str(offset)] = matches
-                state['provenance'][str(offset)] = dict(origin=origin, audio_digest=digest)
-                save(checkpoint, state)
+                state['provenance'][str(offset)] = dict(origin=origin, audio_digest=digest,
+                                                       recognized_at=recognized_at)
+                persist()
                 known_songs.update(song_key(m) for m in matches)
                 done += 1
                 progress(activity='Sample saved', offset=offset, matches=matches, origin=origin)
@@ -249,20 +310,39 @@ def scan(path, args, settings, event_handler=None):
         state['sampling'] = dict(duration_seconds=seconds, baseline_samples=len(offsets),
                                  refinement_enabled=args.refine, min_score=args.min_score,
                                  complete=False)
-        save(checkpoint, state)
+        if getattr(args, 'retry_unmatched', False):
+            state['unmatched_retry'] = dict(started_at=retry_start,
+                                            min_age_days=args.unmatched_min_age_days, complete=False)
+        persist()
         if getattr(args, 'threaded', False):
             emit('message', text='Threaded audio preparation: one worker, one sample ahead; Shazam requests remain sequential.')
-        complete = run_offsets(offsets, 'Baseline')
+        complete = run_offsets(retries, 'Retry unmatched', retry=True) if retries else True
+        if complete:
+            complete = run_offsets(offsets, 'Baseline')
         if complete and args.refine:
             complete = run_offsets(refinement_offsets(offsets, state['results'], args.min_score), 'Refinement')
         state['sampling']['complete'] = complete
-        save(checkpoint, state)
+        if getattr(args, 'retry_unmatched', False):
+            state['unmatched_retry']['complete'] = complete
+        persist()
         emit('finished', complete=complete, requests=calls, cache_hits=hits,
              resumed=resumed, songs=len(known_songs))
     finally:
         cache.close()
-        export(state, folder, args.min_score)
-        retire_checkpoint(state, folder)
+        with metrics.measure('export'):
+            export(state, folder, args.min_score)
+            retire_checkpoint(state, folder)
+        if not args.seed_cache:
+            measured = metrics.snapshot(requests=calls, cache_hits=hits, resumed=resumed)
+            # Telemetry failures must not turn saved recognition into a failed scan.
+            try:
+                save(folder / 'metrics.json', measured)
+            except OSError as error:
+                emit('message', text=f'Could not save timing metrics: {error}')
+            emit('metrics', metrics=measured)
+            emit('message', text='Timing: ' + ', '.join(
+                f'{name} {measured["seconds"][name]:.2f}s'
+                for name in ('extraction', 'recognition', 'pacing', 'checkpoint')))
         emit('message', text=f'This run: {calls} provider requests, {hits} exact-audio cache hits.')
         emit('message', text=f'Review files: {folder}')
         emit('exported', folder=str(folder))
@@ -281,11 +361,13 @@ def main(argv=None, event_handler=None):
     parser.add_argument('--max-requests', type=int, help='Limit new requests per recording in this run')
     parser.add_argument('--no-refine', dest='refine', action='store_false')
     parser.add_argument('--threaded', action='store_true', help='Prepare one sample ahead in a background thread; recognition remains sequential')
+    add_retry_arguments(parser)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--dry-run', action='store_true', help='Estimate samples without API requests or credentials')
     mode.add_argument('--export-only', action='store_true', help='Rebuild CSVs from the checkpoint without recognition requests')
     mode.add_argument('--seed-cache', action='store_true', help='Index existing matched samples locally without provider requests')
     args = parser.parse_args(argv)
+    validate_retry_arguments(parser, args)
     if args.interval < args.sample_length or not math.isfinite(args.delay) or args.delay < 0:
         parser.error('Interval must be at least sample length; delay must be finite and nonnegative')
     if not 0 <= args.min_score <= 100 or (args.max_requests is not None and args.max_requests < 1):

@@ -19,6 +19,7 @@ from . import diagnostics
 from .locking import output_lock as batch_lock
 from .storage import load_state, retire_checkpoint
 
+PROGRESS_SAVE_SECONDS = 5
 
 class BatchPause(Exception):
     pass
@@ -96,6 +97,8 @@ def completed_output(entry, source, args):
         )
         if complete:
             retire_checkpoint(state, folder)
+            if scanner.retry_offsets(state, args):
+                return False
         return complete
     except (OSError, ValueError, KeyError, TypeError):
         return False
@@ -156,6 +159,12 @@ def run(args, event_handler=None):
     queue = json.loads(queue_path.read_text()) if queue_path.exists() else dict(identity=identity, files={})
     if queue['identity'] != identity:
         raise ValueError('Batch queue settings do not match')
+    if args.retry_unmatched:
+        campaign = queue.get('unmatched_retry', {})
+        if campaign.get('complete') is not False or campaign.get('min_age_days') != args.unmatched_min_age_days:
+            campaign = dict(started_at=time.time(), min_age_days=args.unmatched_min_age_days, complete=False)
+            queue['unmatched_retry'] = campaign
+        args.retry_started_at = campaign['started_at']
     for path in files:
         stat = path.stat()
         signature = dict(size=stat.st_size, mtime_ns=stat.st_mtime_ns)
@@ -198,9 +207,11 @@ def run(args, event_handler=None):
             queue['last_run'].update(current=str(path), current_index=index, updated_at=time.time())
             scanner.save(queue_path, queue)
             calls = hits = 0
+            progress_saved_at = time.perf_counter()
+            saved_phase = None
 
             def handle(event):
-                nonlocal calls, hits
+                nonlocal calls, hits, progress_saved_at, saved_phase
                 if event['kind'] == 'progress':
                     # Stop before extraction/pacing. An in-flight request is allowed
                     # to save its response before the next deadline check.
@@ -211,13 +222,23 @@ def run(args, event_handler=None):
                     entry['progress'] = {k: event[k] for k in ('phase', 'done', 'total', 'songs', 'activity', 'offset', 'resumed') if k in event}
                     queue['last_run'].update(requests=total_calls + calls, cache_hits=total_hits + hits,
                                              updated_at=time.time())
-                    scanner.save(queue_path, queue)
+                    now = time.perf_counter()
+                    # Recognition evidence remains checkpointed per sample.
+                    # Persist phase changes and saved samples immediately; coalesce
+                    # the intermediate UI activities between those durable events.
+                    if (event['activity'] in ('Extracting audio', 'Sample saved') or event['phase'] != saved_phase
+                            or now - progress_saved_at >= PROGRESS_SAVE_SECONDS):
+                        scanner.save(queue_path, queue)
+                        progress_saved_at = time.perf_counter()
+                        saved_phase = event['phase']
                     if not event_handler and event['activity'] == 'Sample saved':
                         message(f"  {event['phase']} {event['done']}/{event['total']} | {event['songs']} songs | batch requests {total_calls + calls}")
                 elif event['kind'] == 'finished':
                     entry['status'] = 'complete' if event['complete'] else 'paused'
                 elif event['kind'] == 'exported':
                     entry['output'] = event['folder']
+                elif event['kind'] == 'metrics':
+                    entry['metrics'] = event['metrics']
                 elif event['kind'] == 'message' and not event_handler:
                     message(event['text'])
                 if event_handler:
@@ -226,6 +247,8 @@ def run(args, event_handler=None):
             scan_args = argparse.Namespace(output=args.output, cache=None, interval=args.interval,
                 sample_length=12, min_score=80, delay=args.delay, refine=args.refine,
                 threaded=args.threaded,
+                retry_unmatched=args.retry_unmatched, unmatched_min_age_days=args.unmatched_min_age_days,
+                retry_started_at=getattr(args, 'retry_started_at', None),
                 max_requests=args.max_requests - total_calls if args.max_requests else None,
                 dry_run=False, export_only=False, seed_cache=False)
             try:
@@ -255,6 +278,8 @@ def run(args, event_handler=None):
             if entry['status'] == 'paused':
                 raise BatchPause('Batch request limit reached')
         queue['last_run']['status'] = 'complete_with_errors' if any(queue['files'][str(p)]['status'] == 'failed' for p in files) else 'complete'
+        if args.retry_unmatched:
+            queue['unmatched_retry']['complete'] = True
         exit_code = 1 if queue['last_run']['status'] == 'complete_with_errors' else 0
     except BatchPause as error:
         queue['last_run']['status'] = 'paused'
@@ -289,7 +314,9 @@ def main(argv=None, event_handler=None):
     parser.add_argument('--threaded', action='store_true', help='Prepare one sample ahead in a background thread; recognition remains sequential')
     parser.add_argument('--retry-failed', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
+    scanner.add_retry_arguments(parser)
     args = parser.parse_args(argv)
+    scanner.validate_retry_arguments(parser, args)
     args.source = args.source.expanduser().resolve()
     args.output = args.output.expanduser().resolve()
     if args.interval < 12 or args.max_requests < 0 or not math.isfinite(args.delay) or args.delay < 0 or not math.isfinite(args.max_minutes) or args.max_minutes < 0:

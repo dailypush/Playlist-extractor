@@ -37,7 +37,7 @@ remove it deliberately. Default pacing is three seconds, with no automatic retri
 or increase in concurrency. There is no guaranteed safe quota for unofficial
 Shazam access. Requests already in flight may finish after a time limit; time
 limits are cooperative, not hard process deadlines.
-Media probing times out after 60 seconds and each audio extraction after 120
+Media probing times out after 120 seconds and each audio extraction after 120
 seconds. Timeouts pause the queue and retain saved samples; unattended mode
 automatically retries after its error backoff. Repeated timeouts keep the queue
 paused for investigation rather than declaring the recording corrupt.
@@ -130,6 +130,22 @@ Each invocation reports completed/failed files, new requests and cache hits. A
 normal request/time-budget pause exits 0 with queue status `paused`; errors exit 1,
 and interruptions exit 130. Inspect queue status to distinguish completion from a
 budget pause. Failed files require review before treating the batch as complete.
+
+Batch also accepts `--retry-unmatched --unmatched-min-age-days 7`, with the same
+semantics as [single-recording retries](SCANNING.md#revisit-unmatched-samples).
+Eligible completed recordings are reopened without changing their identities.
+The age cutoff is retained across capped invocations until that retry pass
+finishes, including when the minimum age is zero. The global request/time caps
+still apply. Unattended service operation does not enable retrospective retries
+by default, so deploying this feature continues the existing queue normally.
+
+Queue writes retain immediate phase, extraction-start, saved-sample and lifecycle
+updates. Intermediate pacing/recognition activity updates are coalesced within a
+five-second window; long operations do not emit a background heartbeat. All
+per-sample checkpoints remain immediate. The latest per-recording timing metrics
+are attached to the queue on scan exit and shown in the dashboard. Metrics refer
+to that invocation, not the cumulative recording history; see the scanning guide
+for overlapping timing stages and process-memory limitations.
 
 An OS file lock prevents scans, exports, cache seeding and batches from writing
 to the same output simultaneously. Dry runs do not need the lock.

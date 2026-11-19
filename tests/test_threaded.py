@@ -68,7 +68,7 @@ class ThreadedScannerTests(unittest.TestCase):
     def test_threaded_exports_match_sequential_and_resume_keeps_identity(self):
         def extract(path, offset, length, **kwargs):
             return fake_sample(path, offset, length)
-        with patch.object(scanner, 'sample', side_effect=extract), patch.object(scanner, 'recognize', return_value=[track()]) as api:
+        with patch.object(scanner, 'sample', side_effect=extract), patch.object(scanner, 'recognize', return_value=[track()]) as api, patch.object(scanner.time, 'time', return_value=1_800_000_000):
             self.assertEqual(scanner.main(self.args), 0)
             original = next((self.root / 'out').glob('*/playlist.json')).parent
             threaded_args = [str(self.source), '--output', str(self.root / 'threaded'), '--delay', '0', '--no-refine', '--threaded']

@@ -118,6 +118,14 @@ def render(queue, path, alive=False, failures=False, scroll=0, now=None):
             lines.append(f"Audio offset {timestamp(progress.get('offset', 0))} | {progress.get('resumed', 0)} reused samples")
         else:
             lines.append('Probing recording / preparing scan' if alive else 'No sample progress saved yet')
+        metrics = e.get('metrics')
+        if metrics:
+            stages = metrics.get('seconds', {})
+            lines.append('Last measured scan: ' + ' | '.join(
+                f'{label} {stages.get(key, 0):.1f}s' for key, label in
+                (('extraction', 'Extract'), ('recognition', 'Recognize'),
+                 ('pacing', 'Pace'), ('checkpoint', 'Save'))))
+            lines.append(f"Scanner process peak RSS {metrics.get('process_peak_rss_mib', '?')} MiB")
     else:
         lines.append('No active recording')
     if failures:

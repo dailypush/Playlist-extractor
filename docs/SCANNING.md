@@ -46,6 +46,45 @@ fingerprints. Requests have a 45-second timeout and no automatic HTTP retries.
 Service errors stop the operation; completed samples are retained. Ctrl+C also
 keeps saved results. Avoid concurrent scans of the same source/output folder.
 
+## Revisit unmatched samples
+
+Ordinary resume continues to reuse every saved sample. To explicitly revisit
+negative results at least seven days old, while retaining positive matches:
+
+```sh
+python -m playlist_extractor scan recording.mp4 --retry-unmatched --max-requests 20
+```
+
+Use `--unmatched-min-age-days N` to change the age threshold; `0` requests a
+fresh check regardless of age. Failed requests retain the old evidence. An
+interrupted or capped retry keeps its original age cutoff on resume, so samples
+already retried do not consume the next allowance again. Run the same command
+to finish that pass. A completed pass followed by a new explicit retry starts
+a new pass. Previously unscanned samples and normal refinement can also use the
+request allowance after eligible retries finish.
+
+Older archives without recognition timestamps are eligible when retries are
+explicitly requested. Recent exact-cache results can still satisfy a retry;
+their original recognition timestamp is retained. This option does not enable
+automatic HTTP retries and cannot be combined with export-only or cache seeding.
+Dry runs still only estimate sampling work; they do not inspect retry eligibility.
+
+## Timing metrics
+
+Recognition runs write `metrics.json` alongside the review files on completion,
+request-limit pause, or recognition failure. It describes the most recent
+invocation, separately from `playlist.json` and its resumable evidence. It
+includes elapsed time, probe, extraction/hash, preparation wait, provider,
+pacing, cache, checkpoint and export durations, plus request/cache counts.
+
+Extraction time covers prepared samples consumed by the main loop; discarded
+speculative work is excluded. Preparation wait includes failed waits and overlaps
+extraction time, and prefetched extraction can overlap recognition, so these
+durations must not be added together as wall time. Peak RSS is the scanner
+process's lifetime high-water mark, excluding FFmpeg and other child processes;
+it is not a per-recording or whole-system memory measurement. No speedup or ETA
+is inferred from a single run. Export-only and cache-seeding retain prior metrics.
+
 ## Review files
 
 Each source gets a folder under `scan_results` with:

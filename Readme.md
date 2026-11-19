@@ -31,6 +31,9 @@ python3.11 -m venv .venv
 # Scan or resume. Requests are sequential with a three-second pause by default.
 .venv/bin/python -m playlist_extractor scan twitch-pyka
 
+# Explicitly revisit saved no-matches at least seven days old, with a request cap.
+.venv/bin/python -m playlist_extractor scan twitch-pyka --retry-unmatched --max-requests 20
+
 # Rebuild exports and reports locally, without recognition requests.
 .venv/bin/python -m playlist_extractor scan twitch-pyka --export-only
 .venv/bin/python -m playlist_extractor report

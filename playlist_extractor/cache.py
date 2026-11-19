@@ -30,6 +30,11 @@ class RecognitionCache:
         self.db.commit()
 
     def get(self, provider, digest):
+        entry = self.get_entry(provider, digest)
+        return entry[0] if entry is not None else None
+
+    def get_entry(self, provider, digest, *, negative_after=None):
+        """Return matches and their original recognition time, if still usable."""
         row = self.db.execute('SELECT matches, created FROM results WHERE provider=? AND digest=?',
                               (provider, digest)).fetchone()
         if row is None:
@@ -38,7 +43,9 @@ class RecognitionCache:
         # Missing songs can enter a catalog later; retry negative results after a week.
         if not matches and time.time() - row[1] > 7 * 86400:
             return None
-        return matches
+        if not matches and negative_after is not None and row[1] <= negative_after:
+            return None
+        return matches, row[1]
 
     def put(self, provider, digest, matches):
         with self.db:
